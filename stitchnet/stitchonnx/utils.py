@@ -606,6 +606,7 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
         raise e
     tX = torch.from_numpy(x1)
     tY = torch.from_numpy(x2)
+    
     # score = get_score(tX, tY)
     # if score < 0.5:
     #     return None
@@ -647,10 +648,26 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
     for att in node.attribute:
         # print(att)
         kwargs[att.name] = helper.get_attribute_value(att)
+        
+        
+    newNodeOutName = newname
+    if tX.ndim == 4 and tY.ndim == 2:
+        newNodeOutName += "_pool"
+        poolNode = helper.make_node(
+            'GlobalAveragePool',
+            inputs=[f'{newNodeOutName}'],
+            outputs=[f'{newNodeOutName}_poolflat'],
+        )
+        flatNode = helper.make_node(
+            'Flatten',
+            inputs=[f'{newNodeOutName}_poolflat'],
+            outputs=[f'{newname}'],  # Default value for axis: axis=1
+        )
+        
     newNode = helper.make_node(
         node.op_type,                  # optype
         node.input, # inputs
-        [newname],               # outputs
+        [newNodeOutName],               # outputs
         node.name+"_nodeexit_timestamp_"+str((time.time())), # name
         node.doc_string,
         node.domain,
@@ -671,6 +688,9 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
     # )
     
     nodes.append(newNode)    
+    if tX.ndim == 4 and tY.ndim == 2:
+        nodes.append(poolNode)
+        nodes.append(flatNode)
     
     inpnodes = get_input_nodes(newFragment)
     # print('[n.op_type for n in inputnodes]', [n.op_type for n in inpnodes])
