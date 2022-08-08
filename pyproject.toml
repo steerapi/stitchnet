@@ -7,7 +7,13 @@ exclude = ["_*"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-onnx-tool = { git = "https://github.com/steerapi/onnx-tool.git" }
+onnx-tool = { git = "https://github.com/steerapi/onnx-tool.git", branch = "main" }
+torch = "^1.12.1"
+skl2onnx = "^1.12"
+onnxoptimizer = "^0.3.0"
+seaborn = "^0.11.2"
+pyppeteer = "^1.0.2"
+netron = "^5.9.9"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
