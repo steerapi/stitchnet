@@ -857,11 +857,13 @@ class ScoreMapper:
         return self.scoreMap[hashx]
         # return scores
 
-def find_next_fragment(curr, scoreMapper, data, threshold=0.5):
+def find_next_fragment(curr, scoreMapper, data, threshold=0.5, sample=False):
     x1 = curr.get_output(data)
     scores = scoreMapper.score(x1)
     print('potential next fragments:', len(scores))
     scores = [score for score in scores if score[0]>threshold]
+    if sample:
+        scores = [np.random.choice(scores)]
     print(f'potential next fragments after thresholding of {threshold}:', len(scores))
     for s,nextf in scores:
         score = get_score_fragments(curr, nextf, data)
@@ -890,10 +892,10 @@ def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 22
     macs,params,nodemap=graph_profile(fragment.fragment.graph, inputs, False)
     return macs, params
 
-def recursive_stitching(curr, scoreMapper, data, threshold=0.5, totalthreshold=0.5, totalscore=1):
-    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold):
+def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, sample=False):
+    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, sample):
         totalscore_nextf = totalscore*score
-        if totalscore_nextf < totalthreshold:
+        if totalscore_nextf < totalThreshold:
             continue
         print('totalscore', totalscore_nextf);
         try:
@@ -906,7 +908,7 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.5, totalthreshold=0
                 newcurr_fragment = stitch_fragments(curr, nextf, data)
                 newcurr_net = Net([newcurr_fragment], get_net_id(curr, nextf))
                 newcurr = newcurr_net[0]
-                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalthreshold, totalscore_nextf):
+                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalThreshold, totalscore_nextf, sample):
                     yield _score, _curr
         except Exception as e:
             # catch death end path with errors
@@ -915,13 +917,13 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.5, totalthreshold=0
             # raise e
             # pass
             
-def generate_networks(nets, scoreMapper, data, threshold=0.5, totalThreshold=0.5):
+def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5, sample=False):
     fragments = [f for net in nets for f in net]
     starts = [f for f in fragments if f.fragment.graph.name == 'start']
     ends = [f for f in fragments if f.fragment.graph.name == 'end']
     middles = [f for f in fragments if f.fragment.graph.name not in ['start','end']]
     for start in starts:
-        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold):
+        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold, sample):
             yield score, curr.net
         
 # def sample_network(nets, data, maxround=10, threshold=0.5):
