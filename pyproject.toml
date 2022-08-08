@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "stitchnet"
+version = "0.1.0"
+description = ""
+authors = ["Surat Teerapittayanon <steerapi@gmail.com>"]
+exclude = ["_*"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+onnx-tool = { git = "https://github.com/steerapi/onnx-tool.git" }
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
