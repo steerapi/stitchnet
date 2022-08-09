@@ -370,6 +370,16 @@ class Net:
         self.fragmentCs = fragmentCs
         self.results = defaultdict(dict)
     
+    def save(self, path):
+        print('len(self.fragments)', len(self.fragments))
+        if len(self.fragments) == 1:
+            print('saving to', path)
+            save_onnx_model(self.fragments[0], f'{path}.onnx')
+        else:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            for i,fragment in enumerate(self.fragments):
+                save_onnx_model(fragment, f'{path}_{i:03}.onnx')
+        
     def get_id(self):
         return self.id
     def get_scores(self, x1, data):
