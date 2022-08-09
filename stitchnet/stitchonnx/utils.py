@@ -840,7 +840,7 @@ class ScoreMapper:
         self.nets = nets
         self.scoreMap = {}
         self.data = data
-    def score(self, x1, hashId=None):
+    def score(self, x1, curDepth, maxDepth=10, hashId=None):
         hashx = hashlib.md5(x1.data.tobytes()).hexdigest()
         # if hashId is None:
         # else:
@@ -850,33 +850,48 @@ class ScoreMapper:
         #     return self.scoreMap[hashx]
         scores = []
         for net2 in tqdm(self.nets):
-             scores += net2.get_scores(x1,self.data)
+            nextscores = net2.get_scores(x1,self.data)
+            # only take ending segments
+            if curDepth >= maxDepth-1:
+                scores += nextscores[-1:]
+            else:
+                scores += nextscores
         scores = sorted(scores, key=lambda x:x[0], reverse=True)
         # disabled caching for now since it is taking up too much memory
         self.scoreMap[hashx] = scores
         return self.scoreMap[hashx]
         # return scores
 
-def find_next_fragment(curr, scoreMapper, data, threshold=0.5, sample=False):
+def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, sample=False):
     x1 = curr.get_output(data)
-    scores = scoreMapper.score(x1)
+    fId = curr.get_id()
+    if type(fId[0]) is tuple:
+        curDepth = len(fId[0])
+    else:
+        curDepth = 1
+    print('current depth:', curDepth) 
+    scores = scoreMapper.score(x1, curDepth, maxDepth=maxDepth)
     print('potential next fragments:', len(scores))
     scores = [score for score in scores if score[0]>threshold]
-    if sample:
-        scores = [np.random.choice(scores)]
-    print(f'potential next fragments after thresholding of {threshold}:', len(scores))
+    # print('scores', [f'{s[0]:.2}' for s in scores])
+    if sample and len(scores)>0:
+        i = np.random.choice(range(len(scores)))
+        scores = [scores[i]]
+    print(f'potential next fragments after thresholding of {threshold}:', len(scores), [f'{s[0]:.2}' for s in scores])
     for s,nextf in scores:
-        score = get_score_fragments(curr, nextf, data)
-        if score < threshold:
-            continue
-        yield score,nextf
+        # score = get_score_fragments(curr, nextf, data)
+        # if score < threshold:
+        #     continue
+        # yield score,nextf
+        if s > threshold:
+            yield s,nextf
         
 def get_net_id(curr, nextf):
     fId = curr.get_id()
     if type(fId[0]) is tuple:
         nId = fId[0] + (nextf.get_id(),)
     else:
-        nId = (fId,)
+        nId = (fId,) + (nextf.get_id(),)
     return nId
 
 import onnx_tool
@@ -892,8 +907,8 @@ def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 22
     macs,params,nodemap=graph_profile(fragment.fragment.graph, inputs, False)
     return macs, params
 
-def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, sample=False):
-    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, sample):
+def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False):
+    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, maxDepth, sample):
         totalscore_nextf = totalscore*score
         if totalscore_nextf < totalThreshold:
             continue
@@ -908,7 +923,7 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
                 newcurr_fragment = stitch_fragments(curr, nextf, data)
                 newcurr_net = Net([newcurr_fragment], get_net_id(curr, nextf))
                 newcurr = newcurr_net[0]
-                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalThreshold, totalscore_nextf, sample):
+                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalThreshold, totalscore_nextf, maxDepth, sample):
                     yield _score, _curr
         except Exception as e:
             # catch death end path with errors
@@ -917,13 +932,15 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
             # raise e
             # pass
             
-def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5, sample=False):
+def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5, maxDepth=10, sample=False):
     fragments = [f for net in nets for f in net]
     starts = [f for f in fragments if f.fragment.graph.name == 'start']
     ends = [f for f in fragments if f.fragment.graph.name == 'end']
     middles = [f for f in fragments if f.fragment.graph.name not in ['start','end']]
+    if sample:
+        starts = [np.random.choice(starts)]
     for start in starts:
-        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold, sample):
+        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold, 1.0, maxDepth=maxDepth, sample=sample):
             yield score, curr.net
         
 # def sample_network(nets, data, maxround=10, threshold=0.5):
@@ -1106,45 +1123,45 @@ def load_dl(dset, bs):
 #     return dl
 
 
-def find_network(nets, data, maxround=10):
-    fragments = [f for net in nets for f in net]
-    starts = [f for f in fragments if f.fragment.graph.name == 'start']
-    ends = [f for f in fragments if f.fragment.graph.name == 'end']
-    middles = [f for f in fragments if f.fragment.graph.name not in ['start','end']]
+# def find_network(nets, data, maxround=10):
+#     fragments = [f for net in nets for f in net]
+#     starts = [f for f in fragments if f.fragment.graph.name == 'start']
+#     ends = [f for f in fragments if f.fragment.graph.name == 'end']
+#     middles = [f for f in fragments if f.fragment.graph.name not in ['start','end']]
     
-    start = np.random.choice(starts)
-    curr = start
-    totalscore = 1
-    while maxround >= 0:
-        nextf = np.random.choice(middles + ends)
-        score = get_score_fragments(curr, nextf, data)
-        if score < threshold:
-            continue
+#     start = np.random.choice(starts)
+#     curr = start
+#     totalscore = 1
+#     while maxround >= 0:
+#         nextf = np.random.choice(middles + ends)
+#         score = get_score_fragments(curr, nextf, data)
+#         if score < threshold:
+#             continue
 
-        # print('pick')
-        # list_ops(nextf.fragment)
-        # if get_score_fragments(curr, nextf, data) < 0.1:
-        #     continue
-        try:
-            curr_fragment = stitch_fragments(curr, nextf, data)
-            curr_net = Net([curr_fragment])
-            curr = curr_net[0]
-            totalscore *= score
-            # print('c', curr)
-            if nextf.fragment.graph.name == 'end':
-                break
-        except:
-            # traceback.print_exc()
-            pass
-        maxround-=1
+#         # print('pick')
+#         # list_ops(nextf.fragment)
+#         # if get_score_fragments(curr, nextf, data) < 0.1:
+#         #     continue
+#         try:
+#             curr_fragment = stitch_fragments(curr, nextf, data)
+#             curr_net = Net([curr_fragment])
+#             curr = curr_net[0]
+#             totalscore *= score
+#             # print('c', curr)
+#             if nextf.fragment.graph.name == 'end':
+#                 break
+#         except:
+#             # traceback.print_exc()
+#             pass
+#         maxround-=1
         
-    if nextf.fragment.graph.name != 'end':
-        nextf = np.random.choice(ends)
-        # print('pickend')
-        # list_ops(nextf.fragment)
-        curr_fragment = stitch_fragments(curr, nextf, data)
-        curr_net = Net([curr_fragment])
-        score = get_score_fragments(curr, nextf, data)
-        totalscore *= score
-    return curr_net, totalscore
+#     if nextf.fragment.graph.name != 'end':
+#         nextf = np.random.choice(ends)
+#         # print('pickend')
+#         # list_ops(nextf.fragment)
+#         curr_fragment = stitch_fragments(curr, nextf, data)
+#         curr_net = Net([curr_fragment])
+#         score = get_score_fragments(curr, nextf, data)
+#         totalscore *= score
+#     return curr_net, totalscore
         
