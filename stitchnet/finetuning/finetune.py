@@ -27,6 +27,9 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
     since = time.time()
 
     val_acc_history = []
+    val_loss_history = []
+    train_acc_history = []
+    train_loss_history = []
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
@@ -91,7 +94,12 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
             if phase == 'val':
+                val_loss_history.append(epoch_loss)
                 val_acc_history.append(epoch_acc)
+            elif phase == 'train':
+                train_loss_history.append(epoch_loss)
+                train_acc_history.append(epoch_acc)
+                
 
         print()
 
@@ -101,7 +109,7 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
 
     # load best model weights
     model.load_state_dict(best_model_wts)
-    return model, val_acc_history
+    return model, zip(val_acc_history, val_loss_history, train_acc_history, train_loss_history)
 
 
 def create_optimizer(model_ft, feature_extract=False):
@@ -126,3 +134,31 @@ def create_optimizer(model_ft, feature_extract=False):
     # Observe that all parameters are being optimized
     optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
     return optimizer_ft
+
+
+def finetune(model_onnx1, num_classes = 2, num_epochs = 30, batch_size = 64, feature_extract = True):
+    import torch
+    from onnx2torch import convert
+    from stitchnet.finetuning.finetune import train_model,set_parameter_requires_grad,create_optimizer
+    from torch import nn
+
+    # model_onnx1 = load_onnx_model(modelname)
+    torch_model_1 = convert(model_onnx1)
+
+    set_parameter_requires_grad(torch_model_1, feature_extract)
+    k,lastLayer = [(n,m) for n,m in torch_model_1.named_modules()][-1]
+    setattr(torch_model_1, k, nn.Linear(lastLayer.in_features, num_classes, bias=lastLayer.bias is not None))
+    
+    from stitchnet.stitchonnx.utils import load_cats_and_dogs_dset,load_dl
+    dataloaders_dict = dict(
+        train=load_dl(load_cats_and_dogs_dset("train"), batch_size),
+        val=load_dl(load_cats_and_dogs_dset("test"), batch_size)
+    )
+    
+    optimizer_ft = create_optimizer(torch_model_1)
+    # Setup the loss fxn
+    criterion = nn.CrossEntropyLoss()
+    # Train and evaluate
+    model_ft, hist = train_model(torch_model_1, dataloaders_dict, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=False)
+
+    return model_ft, hist
