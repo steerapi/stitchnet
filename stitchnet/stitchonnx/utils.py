@@ -388,7 +388,7 @@ class Net:
         for i,f in enumerate(self.fragments[:-1]):
             x2 = self.get_output(f,data)
             tY = torch.from_numpy(x2)
-            score = get_score(tX, tY)
+            score = get_score(tX, tY, min(tX.shape[1],tY.shape[1])*10)
             score_fragments.append((score, self.fragmentCs[i+1]))
         return score_fragments
     
@@ -509,8 +509,8 @@ class Fragment:
         return replace_ws(f, names, ws)
     
     
-def sample_index(X,Y):
-    num_samples = min(min(X.shape[1],Y.shape[1])*10, X.shape[0], Y.shape[0])
+def sample_index(X,Y, nsample=1000):
+    num_samples = min(min(X.shape[0], Y.shape[0]), nsample)
     # print(X.shape, Y.shape)
     p = torch.ones(X.shape[0])
     indexX = p.multinomial(num_samples=num_samples)
@@ -549,13 +549,41 @@ def adjust_w_linear(tX, tY, w):
         acts1 = tX.reshape(tX.shape[0], -1)
         acts2 = tY
     
-    A = acts2.T @ acts1.T.pinverse()
+    Ainit = acts2.T @ acts1.T.pinverse()
+    # print(acts1.shape)
+    # print(acts2.shape)
+    # print('linear')
+    A = train_w(acts1, acts2, Ainit)
     
     tw = torch.from_numpy(w)
     nw = torch.einsum('ij, jk -> ik', tw, A)
     nw = nw.numpy()
     return nw
-    
+
+from torch.autograd import Variable
+def train_w(acts1, acts2, Winit, nepoch=10, batch_size=1024, learning_rate=1e-6, momentum=0.9):
+    dtype = acts1.dtype
+    W = Variable(Winit, requires_grad=True)
+    optimizer = torch.optim.SGD([W], lr=learning_rate, momentum=0.9)
+    dset = torch.utils.data.TensorDataset(acts1,acts2)
+    prev_loss = None
+    for epoch in range(nepoch):
+        running_loss = 0
+        for x,y in torch.utils.data.DataLoader(dset, shuffle=True, batch_size=batch_size, drop_last=True):
+            optimizer.zero_grad()
+            y_pred = x.matmul(W)
+            loss = (y_pred - y).pow(2).sum()
+            loss.backward()
+            running_loss += loss.item()
+            optimizer.step()
+        epoch_loss = running_loss/len(dset)
+        # early stopping
+        if prev_loss is not None and prev_loss < epoch_loss:
+            break
+        print(f'epoch {epoch} loss', epoch_loss)
+        prev_loss = epoch_loss        
+    return W.detach()
+
 def adjust_w_conv(tX, tY, w):
     if tY.shape[-2]!=tX.shape[-2] and tY.shape[-1]!=tX.shape[-1]:
         up = torch.nn.UpsamplingBilinear2d((tY.shape[-2],tY.shape[-1]))
@@ -565,11 +593,13 @@ def adjust_w_conv(tX, tY, w):
     acts1 = tX.permute((0,2,3,1)).reshape(-1,tX.shape[1])
     acts2 = tY.permute((0,2,3,1)).reshape(-1,tY.shape[1])
 
-    indexX = sample_index(acts1, acts2)
-    acts1 = acts1[indexX,:]
-    acts2 = acts2[indexX,:]
-
-    A = acts2.T @ acts1.T.pinverse()
+    indexX = sample_index(acts1, acts2, nsample=min(acts1.shape[0], acts2.shape[0])*10)
+    acts1sampled = acts1[indexX,:]
+    acts2sampled = acts2[indexX,:]
+    Ainit = acts2sampled.T @ acts1sampled.T.pinverse()
+    # print(acts1.shape)
+    # print(acts2.shape)
+    A = train_w(acts1, acts2, Ainit)
     
     tw = torch.from_numpy(w)
     nw = torch.einsum('ijkl, jn -> inkl', tw, A)
@@ -1008,7 +1038,7 @@ def evalulate_stitchnet(net, data):
     
 from .ptCKA import linear_CKA
 @torch.no_grad()
-def get_score(X, Y):
+def get_score(X, Y, num_samples=1000):
     # X = torch.from_numpy(X)
     # Y = torch.from_numpy(Y)
     # print('X1', X.shape)
@@ -1025,7 +1055,7 @@ def get_score(X, Y):
         X = X.permute((0,2,3,1)).reshape(-1,X.shape[1])
         Y = Y.permute((0,2,3,1)).reshape(-1,Y.shape[1])
         # only sampling 10 times the channels
-        num_samples = min(min(X.shape[1],Y.shape[1])*10, X.shape[0], Y.shape[0])
+        num_samples = min(num_samples, X.shape[0], Y.shape[0])
         # print(num_samples, X.shape, Y.shape)
         p = torch.ones(X.shape[0])
         indexX = p.multinomial(num_samples=num_samples)
