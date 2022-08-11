@@ -18,6 +18,8 @@ import copy
 from functools import reduce
 import operator
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 # PROVIDERS = ['CPUExecutionProvider']
 PROVIDERS = ['CUDAExecutionProvider', 'CPUExecutionProvider']
 
@@ -549,20 +551,26 @@ def adjust_w_linear(tX, tY, w):
         acts1 = tX.reshape(tX.shape[0], -1)
         acts2 = tY
     
+    acts1 = acts1.to(device)
+    acts2 = acts2.to(device)
     Ainit = acts2.T @ acts1.T.pinverse()
     # print(acts1.shape)
     # print(acts2.shape)
     # print('linear')
     A = train_w(acts1, acts2, Ainit)
+    A = A.to(device)
     
-    tw = torch.from_numpy(w)
+    tw = torch.from_numpy(w).to(device)
     nw = torch.einsum('ij, jk -> ik', tw, A)
-    nw = nw.numpy()
+    nw = nw.cpu().numpy()
     return nw
 
 from torch.autograd import Variable
-def train_w(acts1, acts2, Winit, nepoch=10, batch_size=1024, learning_rate=1e-6, momentum=0.9):
+def train_w(acts1, acts2, Winit, nepoch=100, batch_size=1024, learning_rate=1e-6, momentum=0.9):
     dtype = acts1.dtype
+    acts1 = acts1.to(device)
+    acts2 = acts2.to(device)
+    Winit = Winit.to(device)
     W = Variable(Winit, requires_grad=True)
     optimizer = torch.optim.SGD([W], lr=learning_rate, momentum=0.9)
     dset = torch.utils.data.TensorDataset(acts1,acts2)
@@ -582,7 +590,7 @@ def train_w(acts1, acts2, Winit, nepoch=10, batch_size=1024, learning_rate=1e-6,
             break
         print(f'epoch {epoch} loss', epoch_loss)
         prev_loss = epoch_loss        
-    return W.detach()
+    return W.cpu().detach()
 
 def adjust_w_conv(tX, tY, w):
     if tY.shape[-2]!=tX.shape[-2] and tY.shape[-1]!=tX.shape[-1]:
@@ -596,14 +604,19 @@ def adjust_w_conv(tX, tY, w):
     indexX = sample_index(acts1, acts2, nsample=min(acts1.shape[0], acts2.shape[0])*10)
     acts1sampled = acts1[indexX,:]
     acts2sampled = acts2[indexX,:]
+    
+    acts1 = acts1.to(device)
+    acts2 = acts2.to(device)
+    
     Ainit = acts2sampled.T @ acts1sampled.T.pinverse()
     # print(acts1.shape)
     # print(acts2.shape)
     A = train_w(acts1, acts2, Ainit)
+    A = A.to(device)
     
-    tw = torch.from_numpy(w)
+    tw = torch.from_numpy(w).to(device)
     nw = torch.einsum('ijkl, jn -> inkl', tw, A)
-    nw = nw.numpy()
+    nw = nw.cpu().numpy()
     return nw
 
 def adjust_w(tX, tY, w):
@@ -1043,6 +1056,8 @@ def get_score(X, Y, num_samples=1000):
     # Y = torch.from_numpy(Y)
     # print('X1', X.shape)
     # print('Y1', Y.shape)
+    X = X.to(device)
+    Y = Y.to(device)
     if X.ndim == 4 and Y.ndim == 4:
         if X.shape[2] > Y.shape[2]:
             up = torch.nn.UpsamplingBilinear2d((Y.shape[-2],Y.shape[-1]))
@@ -1116,7 +1131,10 @@ def convert_imagenet_to_cat_dog_label(y):
 def accuracy_score_model(model, dataset, bs=64):
     count = 0
     for x,t in tqdm(torch.utils.data.DataLoader(dataset, batch_size=bs)):
+        x = x.to(device)
+        model.to(device)
         y = model(x)
+        y = y.cpu()
         y = np.argmax(y.detach().numpy(), 1)
         y = convert_imagenet_to_cat_dog_label(y)
         count += np.sum(y == t.numpy())
