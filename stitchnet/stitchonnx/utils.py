@@ -578,7 +578,7 @@ def train_w(acts1, acts2, Winit, nepoch=10, batch_size=1024, learning_rate=1e-6,
             optimizer.step()
         epoch_loss = running_loss/len(dset)
         # early stopping
-        if prev_loss is not None and prev_loss < epoch_loss:
+        if prev_loss is not None and prev_loss <= epoch_loss:
             break
         print(f'epoch {epoch} loss', epoch_loss)
         prev_loss = epoch_loss        
