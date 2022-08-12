@@ -1039,13 +1039,13 @@ def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5
 def evalulate_stitchnet(net, data):
     import onnxruntime as ort
     data = data if type(data).__module__ == np.__name__ else data.numpy()
-    for fragmentC in net:
-        change_input_dim(fragmentC.fragment)
-        ort_sess1 = ort.InferenceSession(fragmentC.fragment.SerializeToString(), providers=PROVIDERS)
-        inputs = {}
-        inputs[fragmentC.fragment.graph.input[0].name] = data
-        outputs = ort_sess1.run(None, inputs)
-        data = outputs[0]
+    fragmentC = net[0]
+    change_input_dim(fragmentC.fragment)
+    ort_sess1 = ort.InferenceSession(fragmentC.fragment.SerializeToString(), providers=PROVIDERS)
+    inputs = {}
+    inputs[fragmentC.fragment.graph.input[0].name] = data
+    outputs = ort_sess1.run(None, inputs)
+    data = outputs[0]
         # print(data.shape)
     return data
     
@@ -1145,7 +1145,6 @@ def accuracy_score_net(net, dataset, bs=64):
     count = 0
     for x,t in tqdm(torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=False)):
         y = evalulate_stitchnet(net, x)
-        # print('len(ys)', len(ys))
         # y = ys[0]
         # print('y.shape', y.shape)
         y = np.argmax(y, 1)
