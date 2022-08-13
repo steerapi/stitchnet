@@ -902,7 +902,7 @@ class ScoreMapper:
         return self.scoreMap[hashx]
         # return scores
 
-def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, sample=False):
+def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, sample=False, K=None):
     x1 = curr.get_output(data)
     fId = curr.get_id()
     if type(fId[0]) is tuple:
@@ -911,8 +911,11 @@ def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, samp
         curDepth = 1
     print('current depth:', curDepth) 
     scores = scoreMapper.score(x1, curDepth, maxDepth=maxDepth)
+    if K is not None:
+        scores = scores[:K]
     print('potential next fragments:', len(scores))
-    scores = [score for score in scores if score[0]>threshold]
+    if threshold is not None:
+        scores = [score for score in scores if score[0]>threshold]
     # print('scores', [f'{s[0]:.2}' for s in scores])
     if sample and len(scores)>0:
         i = np.random.choice(range(len(scores)))
@@ -947,8 +950,8 @@ def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 22
     macs,params,nodemap=graph_profile(fragment.fragment.graph, inputs, False)
     return macs, params
 
-def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False):
-    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, maxDepth, sample):
+def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False, K=None):
+    for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, maxDepth, sample, K):
         totalscore_nextf = totalscore*score
         if totalscore_nextf < totalThreshold:
             continue
@@ -963,7 +966,7 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
                 newcurr_fragment = stitch_fragments(curr, nextf, data)
                 newcurr_net = Net([newcurr_fragment], get_net_id(curr, nextf))
                 newcurr = newcurr_net[0]
-                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalThreshold, totalscore_nextf, maxDepth, sample):
+                for _score, _curr  in recursive_stitching(newcurr, scoreMapper, data, threshold, totalThreshold, totalscore_nextf, maxDepth, sample, K):
                     yield _score, _curr
         except Exception as e:
             # catch death end path with errors
@@ -972,7 +975,7 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
             # raise e
             # pass
             
-def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5, maxDepth=10, sample=False):
+def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5, maxDepth=10, sample=False, K=None):
     fragments = [f for net in nets for f in net]
     starts = [f for f in fragments if f.fragment.graph.name == 'start']
     ends = [f for f in fragments if f.fragment.graph.name == 'end']
@@ -980,7 +983,7 @@ def generate_networks(nets, scoreMapper, data, threshold=0.9, totalThreshold=0.5
     if sample:
         starts = [np.random.choice(starts)]
     for start in starts:
-        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold, 1.0, maxDepth=maxDepth, sample=sample):
+        for score, curr in recursive_stitching(start, scoreMapper, data, threshold, totalThreshold, 1.0, maxDepth=maxDepth, sample=sample, K=K):
             yield score, curr.net
         
 # def sample_network(nets, data, maxround=10, threshold=0.5):
