@@ -10,18 +10,25 @@ import matplotlib.pyplot as plt
 import time
 import os
 import copy
-print("PyTorch Version: ",torch.__version__)
-print("Torchvision Version: ",torchvision.__version__)
+from tqdm import tqdm
+import torch
+from onnx2torch import convert
+# from stitchnet.finetuning.finetune import train_model,set_parameter_requires_grad,create_optimizer
+from torch import nn
+from stitchnet.stitchonnx.utils import load_cats_and_dogs_dset,load_dl
 
 # Detect if we have a GPU available
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = 'cpu'
+print("PyTorch Version: ",torch.__version__)
+print("Torchvision Version: ",torchvision.__version__)
+print("device", device)
 
 def set_parameter_requires_grad(model, feature_extracting=False):
     if feature_extracting:
         for param in model.parameters():
             param.requires_grad = False
-            
+                        
 def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_inception=False):
     model.to(device)
     since = time.time()
@@ -49,7 +56,7 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
             running_corrects = 0
 
             # Iterate over data.
-            for inputs, labels in dataloaders[phase]:
+            for inputs, labels in tqdm(dataloaders[phase]):
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
@@ -137,10 +144,6 @@ def create_optimizer(model_ft, feature_extract=False):
 
 
 def finetune(model_onnx1, num_classes = 2, num_epochs = 30, batch_size = 64, feature_extract = True):
-    import torch
-    from onnx2torch import convert
-    from stitchnet.finetuning.finetune import train_model,set_parameter_requires_grad,create_optimizer
-    from torch import nn
 
     # model_onnx1 = load_onnx_model(modelname)
     torch_model_1 = convert(model_onnx1)
@@ -149,7 +152,6 @@ def finetune(model_onnx1, num_classes = 2, num_epochs = 30, batch_size = 64, fea
     k,lastLayer = [(n,m) for n,m in torch_model_1.named_modules()][-1]
     setattr(torch_model_1, k, nn.Linear(lastLayer.in_features, num_classes, bias=lastLayer.bias is not None))
     
-    from stitchnet.stitchonnx.utils import load_cats_and_dogs_dset,load_dl
     dataloaders_dict = dict(
         train=load_dl(load_cats_and_dogs_dset("train"), batch_size),
         val=load_dl(load_cats_and_dogs_dset("test"), batch_size)
