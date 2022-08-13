@@ -263,6 +263,20 @@ reference = "main"
 resolved_reference = "d1960e40697b87f928bf29e904cf168f435a0abf"
 
 [[package]]
+name = "onnx2torch"
+version = "1.4.1"
+description = "Nice Onnx to Pytorch converter"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+numpy = ">=1.16.4"
+onnx = ">=1.9.0"
+torch = ">=1.8.0"
+torchvision = ">=0.9.0"
+
+[[package]]
 name = "onnxconverter-common"
 version = "1.12.1"
 description = "ONNX Converter and Optimization Tools"
@@ -717,7 +731,7 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytest-
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.9,<3.12"
-content-hash = "f447470fc88486f94566561458c0d397da29cd980a94c6cd1e7cc5f122aaedbf"
+content-hash = "d8a5e4a6ae38677e1e00db60361ed1b99b68adf5a7759a932debd72f9fba669e"
 
 [metadata.files]
 appdirs = [
@@ -920,6 +934,9 @@ onnx = [
     {file = "onnx-1.12.0.tar.gz", hash = "sha256:13b3e77d27523b9dbf4f30dfc9c959455859d5e34e921c44f712d69b8369eff9"},
 ]
 onnx-tool = []
+onnx2torch = [
+    {file = "onnx2torch-1.4.1-py3-none-any.whl", hash = "sha256:c619335a16e820ef78a3f56a7e47f5cbc2220d860abf8b08f479a75d3740eaf3"},
+]
 onnxconverter-common = [
     {file = "onnxconverter_common-1.12.1-py2.py3-none-any.whl", hash = "sha256:4c6d552f134f48a49eafb2f0ab06a1d2dd27c174b2b0c249e2d6f349e7e22feb"},
 ]

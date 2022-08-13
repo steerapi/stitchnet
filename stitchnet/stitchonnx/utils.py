@@ -336,8 +336,9 @@ def get_fragments(model, x, n=3):
 
 def execute_fragments(fragments, x):
     '''get outputs of all fragments'''
-    outputs = []
-    for f in fragments:
+    outputs = [None]*len(fragments)
+    
+    for i,f in enumerate(fragments):
         change_input_dim(f)
         # print('execute_fragments', 'change input', f.graph.input)
         ort_sess = ort.InferenceSession(f.SerializeToString(), providers=PROVIDERS)
@@ -346,7 +347,7 @@ def execute_fragments(fragments, x):
         inputs[f.graph.input[0].name] = x
         o = ort_sess.run(None, inputs)
         x = o[0]
-        outputs.append(x)
+        outputs[i] = x
     return outputs
 
 from collections import defaultdict
@@ -373,7 +374,7 @@ class Net:
         self.results = defaultdict(dict)
     
     def save(self, path):
-        print('len(self.fragments)', len(self.fragments))
+        # print('len(self.fragments)', len(self.fragments))
         if len(self.fragments) == 1:
             print('saving to', path)
             save_onnx_model(self.fragments[0], f'{path}.onnx')
@@ -577,7 +578,7 @@ def train_w(acts1, acts2, Winit, nepoch=100, batch_size=1024, learning_rate=1e-6
     prev_loss = None
     for epoch in range(nepoch):
         running_loss = 0
-        for x,y in torch.utils.data.DataLoader(dset, shuffle=True, batch_size=batch_size, drop_last=True):
+        for x,y in torch.utils.data.DataLoader(dset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=0):
             optimizer.zero_grad()
             y_pred = x.matmul(W)
             loss = (y_pred - y).pow(2).sum()
@@ -588,7 +589,7 @@ def train_w(acts1, acts2, Winit, nepoch=100, batch_size=1024, learning_rate=1e-6
         # early stopping
         if prev_loss is not None and prev_loss <= epoch_loss:
             break
-        print(f'epoch {epoch} loss', epoch_loss)
+        # print(f'epoch {epoch} loss', epoch_loss)
         prev_loss = epoch_loss        
     return W.cpu().detach()
 
@@ -634,12 +635,48 @@ def adjust_w(tX, tY, w):
 #     )
 #     return newnode
 
-def get_score_fragments(fragment1: Fragment, fragment2: Fragment, data):
+def get_score_net(net, data_score, num_samples=1000):
+    totalscore = 1
+    for i,fragment1 in tqdm(enumerate(net[:-1])):
+        fragment2 = net[i+1]
+        score = get_score_fragments(fragment1, fragment2, data_score, num_samples=num_samples)
+        print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
+        totalscore *= score
+    return totalscore
+
+def get_data_score(batch_size=32):
+    from stitchnet.stitchonnx.utils import load_cats_and_dogs_dset,convert_imagenet_to_cat_dog_label
+    from stitchnet.stitchonnx.utils import accuracy_score_model,accuracy_score_net,load_dl
+    from stitchnet.stitchonnx.utils import generate_networks, ScoreMapper
+    from stitchnet.stitchonnx.report import Report
+    from stitchnet.stitchonnx.utils import evalulate_stitchnet
+
+    from tqdm import tqdm
+    import torch
+    import numpy as np
+    import os
+    from collections import defaultdict
+    import hashlib
+    import random
+    import time
+
+    random.seed(51)
+    np.random.seed(24)
+    torch.manual_seed(77)
+
+    dataset_train = load_cats_and_dogs_dset("train")
+
+    dl_score = load_dl(dataset_train, batch_size)
+    data_score,t = next(iter(dl_score))
+    data_score = data_score.numpy()
+    return data_score
+
+def get_score_fragments(fragment1: Fragment, fragment2: Fragment, data, num_samples=10000):
     x1 = fragment1.get_output(data)
     x2 = fragment2.get_input(data)
     tX = torch.from_numpy(x1)
     tY = torch.from_numpy(x2)
-    score = get_score(tX, tY)
+    score = get_score(tX, tY, num_samples=num_samples)
     return score
 
 def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
@@ -870,7 +907,12 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
     name = 'stitch'
     try:
         newnet = create_onnx_model(fragment1.fragment, nodes=nodes, name=name, inputs=inputs, outputs=outputs, initializer=initializer)
-        newnet = onnxoptimizer.optimize(newnet)
+        newnet = onnxoptimizer.optimize(newnet, passes = [
+                                              'eliminate_nop_transpose',
+                                              'eliminate_nop_pad',
+                                              'fuse_consecutive_transposes',
+                                              'fuse_transpose_into_gemm'
+                                            ])
         change_input_dim(newnet)
         return newnet
     except Exception as e:
@@ -888,6 +930,15 @@ def get_all_fragments(nets):
     fragments = [f for net in nets for f in net]
     return fragments
 
+# import multiprocessing as mp
+# if __name__ == '__main__':
+#     mp.set_start_method('spawn')
+# from multiprocessing import Pool
+
+# def net_scores(net2, x1, data):
+#     return net2.get_scores(x1,data)
+import threading
+
 class ScoreMapper:
     def __init__(self, nets, data):
         self.nets = nets
@@ -901,19 +952,46 @@ class ScoreMapper:
         # # print('hashx in self.scoreMap', hashx in self.scoreMap)
         # if hashx in self.scoreMap:
         #     return self.scoreMap[hashx]
+        # with Pool(len(self.nets)) as p:
+        #     nextscoresAll = p.map(net_scores, zip(self.nets, [x1]*5, [self.data]*5))
+        # for nextscores in nextscoresAll:
+        #     # only take ending segments
+        #     if curDepth >= maxDepth-1:
+        #         scores += nextscores[-1:]
+        #     else:
+        #         scores += nextscores
+        
         scores = []
-        for net2 in tqdm(self.nets):
-            nextscores = net2.get_scores(x1,self.data)
+        def net_scores(net2, x1, data, scores):
+            nextscores = net2.get_scores(x1,data)
             # only take ending segments
             if curDepth >= maxDepth-1:
                 scores += nextscores[-1:]
             else:
-                scores += nextscores
+                scores += nextscores        
+
+        threads = [threading.Thread(
+                    target=net_scores, 
+                    args=(net,x1,self.data,scores)
+              ) for net in self.nets]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        
+        # scores = []
+        # for net2 in tqdm(self.nets):
+        #     nextscores = net2.get_scores(x1,self.data)
+        #     # only take ending segments
+        #     if curDepth >= maxDepth-1:
+        #         scores += nextscores[-1:]
+        #     else:
+        #         scores += nextscores
         scores = sorted(scores, key=lambda x:x[0], reverse=True)
         # disabled caching for now since it is taking up too much memory
-        self.scoreMap[hashx] = scores
-        return self.scoreMap[hashx]
-        # return scores
+        # self.scoreMap[hashx] = scores
+        # return self.scoreMap[hashx]
+        return scores
 
 def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, sample=False):
     x1 = curr.get_output(data)
@@ -958,6 +1036,15 @@ def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 22
     inputs[inputName] = create_ndarray_f32(inputSize)
     # change_input_dim(fragment.fragment,1)
     macs,params,nodemap=graph_profile(fragment.fragment.graph, inputs, False)
+    return macs, params
+
+def get_macs_params_onnx(onnx_model, inputName=None, inputSize=(1, 3, 224, 224)):
+    inputs= {}
+    if inputName is None:
+        inputName = onnx_model.graph.input[0].name
+    inputs[inputName] = create_ndarray_f32(inputSize)
+    # change_input_dim(fragment.fragment,1)
+    macs,params,nodemap=graph_profile(onnx_model.graph, inputs, False)
     return macs, params
 
 def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False):
@@ -1127,10 +1214,11 @@ def convert_imagenet_to_cat_dog_label(y):
         ys.append(py) 
     return np.array(ys)
 
-# @torch.no_grad()
-def accuracy_score_model(model, dataset, bs=64):
+@torch.no_grad()
+def accuracy_score_model(model, dataset, bs=64, num_workers=6):
     count = 0
-    for x,t in tqdm(torch.utils.data.DataLoader(dataset, batch_size=bs)):
+    model.eval()
+    for x,t in tqdm(load_dl(dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
         x = x.to(device)
         model.to(device)
         y = model(x)
@@ -1140,11 +1228,35 @@ def accuracy_score_model(model, dataset, bs=64):
         count += np.sum(y == t.numpy())
     accuracy = 1.*count/len(dataset)
     return accuracy
-    
-def accuracy_score_net(net, dataset, bs=64):
+
+def accuracy_score_net_old(net, dataset, bs=64, num_workers=6):
     count = 0
-    for x,t in tqdm(torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=False)):
+    for x,t in tqdm(load_dl(dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
         y = evalulate_stitchnet(net, x)
+        # y = ys[0]
+        # print('y.shape', y.shape)
+        y = np.argmax(y, 1)
+        y = convert_imagenet_to_cat_dog_label(y)
+        count += np.sum(y == t.numpy())
+    accuracy = 1.*count/len(dataset)
+    return accuracy
+
+import onnxruntime as ort
+
+def accuracy_score_net(net, dataset, bs=64, num_workers=6):
+    count = 0
+    fragmentC = net[0]
+    change_input_dim(fragmentC.fragment)
+    ort_sess1 = ort.InferenceSession(fragmentC.fragment.SerializeToString(), providers=PROVIDERS)
+    
+    for x,t in tqdm(load_dl(dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
+        data = x.numpy()
+
+        # y = evalulate_stitchnet(net, x)
+        inputs = {}
+        inputs[fragmentC.fragment.graph.input[0].name] = data
+        outputs = ort_sess1.run(None, inputs)
+        y = outputs[0]
         # y = ys[0]
         # print('y.shape', y.shape)
         y = np.argmax(y, 1)
@@ -1168,8 +1280,8 @@ def load_cats_and_dogs_dset(folder="train"):
     dataset = torchvision.datasets.ImageFolder(f'_data/dogs_cats/{folder}', transform=preprocess)
     return dataset
 
-def load_dl(dset, bs):
-    dl = torch.utils.data.DataLoader(dset, shuffle=True, batch_size=bs)
+def load_dl(dset, batch_size=64, shuffle=True, num_workers=6):
+    dl = torch.utils.data.DataLoader(dset, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
     return dl
 
 # def load_cats_and_dogs():
@@ -1222,3 +1334,35 @@ def load_dl(dset, bs):
 #         totalscore *= score
 #     return curr_net, totalscore
         
+    
+from collections import defaultdict
+from functools import reduce
+
+@torch.no_grad()
+def eval_original_model(model, dataloaders):
+    model.to(device)
+    model.eval()
+    
+    epoch_acc = defaultdict(int)
+    for phase in ['train', 'val']:
+        running_corrects = 0
+        for inputs, labels in tqdm(dataloaders[phase]):
+            inputs = inputs.to(device)
+            # labels = labels.to(device)
+                            
+            outputs = model(inputs)
+            _, y = torch.max(outputs, 1)
+            
+            y = y.cpu()
+            y = convert_imagenet_to_cat_dog_label(y)
+            running_corrects += np.sum(y == labels.numpy())
+
+            # cat 0, dog 1
+            # preds = torch.where(reduce(torch.bitwise_or, [preds==y for y in catIds]), 0, -1)
+            # preds[reduce(torch.bitwise_or, [preds==y for y in dogIds])] = 1
+            
+            # running_corrects += np.sum(y == t.numpy())
+        
+        epoch_acc[phase] = 1.0 * running_corrects / len(dataloaders[phase].dataset)
+    
+    return epoch_acc['val'],epoch_acc['train']

@@ -7,3 +7,6 @@ StitchNet
 4. See 02_generate_fragments.ipynb
 5. See 03_stitchnet.ipynb
 
+For conda and gpu, please also install for CUDA runtime on onnx
+
+    conda install -c conda-forge cudnn

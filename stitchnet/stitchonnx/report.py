@@ -12,7 +12,7 @@ class Report:
     def evaluate(self, nets, net, netname, score, dataset):
         dot, gname = draw_stitchNet(nets, net, name=netname)
         accuracy = accuracy_score_net(net, dataset, bs=self.bs)
-        print('accuracy', accuracy, self.bs)
+        print('accuracy', accuracy)
         macs, params = get_macs_params(net[0])
         network = net.get_id()
         self.f.write(f'{score},{accuracy},{macs},{params},{gname},"{network}"\n')
