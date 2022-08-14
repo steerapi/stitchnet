@@ -1390,3 +1390,17 @@ def evaluate_onnx_fragment(onnxFragment, dataset_val):
     acc = accuracy_score_net(fullNet, dataset_val, bs=256)
     # print(acc, macs, params)
     return acc, macs, params
+
+def get_accuracy_onnxfragments(onnxFragments, dataset_val):
+    count = 0
+    for x,t in tqdm(load_dl(dataset_val, batch_size=256, shuffle=False, num_workers=0)):
+        outputs = execute_fragments(onnxFragments, x.numpy())
+        y = outputs[-1]
+        # y = model(x)
+        # y = y.cpu()
+        y = np.argmax(y, 1)
+        y = convert_imagenet_to_cat_dog_label(y)
+        count += np.sum(y == t.numpy())
+    accuracy = 1.*count/len(dataset_val)
+    # print('accuracy', accuracy)
+    return accuracy
