@@ -29,10 +29,13 @@ def set_parameter_requires_grad(model, feature_extracting=False):
         for param in model.parameters():
             param.requires_grad = False
                         
-def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_inception=False):
+def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, num_iters=30, is_inception=False):
     model.to(device)
     since = time.time()
 
+    numsamples = []
+    iter_val_acc_history = []
+    
     val_acc_history = []
     val_loss_history = []
     train_acc_history = []
@@ -40,7 +43,20 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
+    running_numsamples = 0
+    iter_count = 0
 
+    def evaluate_val(model):
+        running_corrects = 0
+        for inputs, labels in tqdm(dataloaders['val']):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            _, preds = torch.max(outputs, 1)
+            running_corrects += torch.sum(preds == labels.data)
+        return running_corrects.double() / len(dataloaders['val'].dataset)
+            
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -90,7 +106,23 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
                 # statistics
                 running_loss += loss.item() * inputs.size(0)
                 running_corrects += torch.sum(preds == labels.data)
-
+                
+                if phase == 'train':
+                    running_numsamples += preds.shape[0]
+                    numsamples.append(running_numsamples)
+                    model.eval()
+                    acc = evaluate_val(model)
+                    print(running_numsamples, acc)
+                    iter_val_acc_history.append(acc)
+                    model.train()
+                    iter_count += 1
+                    if iter_count >= num_iters:
+                        break
+                
+                    
+                    # print('HERE')
+                    # break
+                    
             epoch_loss = running_loss / len(dataloaders[phase].dataset)
             epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
 
@@ -106,17 +138,18 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
             elif phase == 'train':
                 train_loss_history.append(epoch_loss)
                 train_acc_history.append(epoch_acc)
-                
-
-        print()
-
+            
+        if iter_count >= num_iters:
+            break
+        
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
-
+    
+    print(val_acc_history)
     # load best model weights
     model.load_state_dict(best_model_wts)
-    return model, zip(val_acc_history, val_loss_history, train_acc_history, train_loss_history)
+    return model, numsamples, iter_val_acc_history, val_acc_history, val_loss_history, train_acc_history, train_loss_history
 
 
 def create_optimizer(model_ft, feature_extract=False):
@@ -143,7 +176,7 @@ def create_optimizer(model_ft, feature_extract=False):
     return optimizer_ft
 
 
-def finetune(model_onnx1, num_classes = 2, num_epochs = 30, batch_size = 64, feature_extract = True):
+def finetune(model_onnx1, num_classes = 2, num_epochs = 30, num_iters=30, batch_size = 64, val_batch_size=256, feature_extract = True):
 
     # model_onnx1 = load_onnx_model(modelname)
     torch_model_1 = convert(model_onnx1)
@@ -154,13 +187,11 @@ def finetune(model_onnx1, num_classes = 2, num_epochs = 30, batch_size = 64, fea
     
     dataloaders_dict = dict(
         train=load_dl(load_cats_and_dogs_dset("train"), batch_size),
-        val=load_dl(load_cats_and_dogs_dset("test"), batch_size)
+        val=load_dl(load_cats_and_dogs_dset("test"), val_batch_size, num_workers=12)
     )
     
     optimizer_ft = create_optimizer(torch_model_1)
     # Setup the loss fxn
     criterion = nn.CrossEntropyLoss()
     # Train and evaluate
-    model_ft, hist = train_model(torch_model_1, dataloaders_dict, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=False)
-
-    return model_ft, hist
+    return train_model(torch_model_1, dataloaders_dict, criterion, optimizer_ft, num_epochs=num_epochs, num_iters=num_iters, is_inception=False)

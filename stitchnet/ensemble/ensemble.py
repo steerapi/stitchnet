@@ -48,3 +48,32 @@ def get_ensemble_accuracy(onnx_model_paths, dataset, batch_size=64, geometric=Tr
     ys = convert_imagenet_to_cat_dog_label(ys)
     accuracy = 1.*np.sum(ys == ts)/len(ts)
     return accuracy, individual_accs
+
+def get_ensemble_accuracy_accum(onnx_model_paths, dataset, batch_size=64):
+    individual_accs = []
+    avg_ys = []
+    for path in onnx_model_paths:
+        onnx_model = load_onnx_model(path)
+        acc,ys = get_accuracy_outputs(onnx_model, dataset, batch_size)
+        individual_accs.append(acc)
+        avg_ys.append(torch.nn.functional.softmax(torch.from_numpy(ys)))
+
+    ts = []
+    for _,t in tqdm(torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False)):
+        ts += list(t.numpy())
+    ts = np.array(ts)
+    def evaluate(avg_y):
+        ys = avg_y.argmax(1)
+        ys = ys.numpy()
+        ys = convert_imagenet_to_cat_dog_label(ys)
+        accuracy = 1.*np.sum(ys == ts)/len(ts)
+        return accuracy
+    
+    running_avg_y = avg_ys[0]
+    accs = []
+    accs.append(evaluate(running_avg_y))
+    for i,avg_y in enumerate(avg_ys[1:]):
+        running_avg_y += avg_y
+        accs.append(evaluate(running_avg_y/(i+2)))
+    
+    return accs, individual_accs

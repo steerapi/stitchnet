@@ -567,7 +567,7 @@ def adjust_w_linear(tX, tY, w):
     return nw
 
 from torch.autograd import Variable
-def train_w(acts1, acts2, Winit, nepoch=100, batch_size=1024, learning_rate=1e-6, momentum=0.9):
+def train_w(acts1, acts2, Winit, nepoch=1, batch_size=1024, learning_rate=1e-6, momentum=0.9):
     dtype = acts1.dtype
     acts1 = acts1.to(device)
     acts2 = acts2.to(device)
@@ -580,16 +580,16 @@ def train_w(acts1, acts2, Winit, nepoch=100, batch_size=1024, learning_rate=1e-6
         running_loss = 0
         for x,y in torch.utils.data.DataLoader(dset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=0):
             optimizer.zero_grad()
-            y_pred = x.matmul(W)
+            y_pred = x.matmul(W.T)
             loss = (y_pred - y).pow(2).sum()
             loss.backward()
             running_loss += loss.item()
             optimizer.step()
         epoch_loss = running_loss/len(dset)
         # early stopping
+        print(f'epoch {epoch} loss', epoch_loss, acts1.shape, acts2.shape)
         if prev_loss is not None and prev_loss <= epoch_loss:
             break
-        # print(f'epoch {epoch} loss', epoch_loss)
         prev_loss = epoch_loss        
     return W.cpu().detach()
 
@@ -605,12 +605,14 @@ def adjust_w_conv(tX, tY, w):
     indexX = sample_index(acts1, acts2, nsample=min(acts1.shape[0], acts2.shape[0])*10)
     acts1sampled = acts1[indexX,:]
     acts2sampled = acts2[indexX,:]
+
+    print('diff sampled', (acts1sampled - acts2sampled).pow(2).sum())
     
     acts1 = acts1.to(device)
     acts2 = acts2.to(device)
     
     Ainit = acts2sampled.T @ acts1sampled.T.pinverse()
-    # print(acts1.shape)
+    # print(Ainit)
     # print(acts2.shape)
     A = train_w(acts1, acts2, Ainit)
     A = A.to(device)
@@ -679,6 +681,14 @@ def get_score_fragments(fragment1: Fragment, fragment2: Fragment, data, num_samp
     score = get_score(tX, tY, num_samples=num_samples)
     return score
 
+def stitch_all_fragments(net, data_score):
+    curr = net[0]
+    for i in range(1,len(net)):
+        newcurr_fragment = stitch_fragments(curr, net[i], data_score)
+        newcurr_net = Net([newcurr_fragment],i)
+        curr = newcurr_net[0]
+    return newcurr_net
+
 def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
     # list_ops(fragment1.fragment)
     # fragment1 = copy.deepcopy(fragment1)
@@ -696,7 +706,6 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
         raise e
     tX = torch.from_numpy(x1)
     tY = torch.from_numpy(x2)
-    
     # score = get_score(tX, tY)
     # if score < 0.5:
     #     return None
@@ -708,6 +717,7 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
         nw = adjust_w(tX, tY, w)
         nws.append(nw)
     newFragment = fragment2.replace_ws(nws)
+    # newFragment = fragment2.fragment
     
     oldinputname = newFragment.graph.input[0].name
     newname = oldinputname+"_timestamp_"+str((time.time()))
@@ -1175,7 +1185,7 @@ def get_score(X, Y, num_samples=1000):
         b = X.shape[0]
         X = X.reshape(b,-1)
         Y = Y.reshape(b,-1)
-        num_samples = min(1000,X.shape[1],Y.shape[1])
+        num_samples = min(num_samples,X.shape[1],Y.shape[1])
         p = torch.ones(X.shape[1])
         indexX = p.multinomial(num_samples=num_samples)
         p = torch.ones(Y.shape[1])
@@ -1188,7 +1198,7 @@ def get_score(X, Y, num_samples=1000):
         b = X.shape[0]
         X = X.reshape(b,-1)
         Y = Y.reshape(b,-1)
-        num_samples = min(1000,X.shape[1],Y.shape[1])
+        num_samples = min(num_samples,X.shape[1],Y.shape[1])
         p = torch.ones(X.shape[1])
         indexX = p.multinomial(num_samples=num_samples)
         p = torch.ones(Y.shape[1])
@@ -1233,6 +1243,7 @@ def accuracy_score_model(model, dataset, bs=64, num_workers=6):
     return accuracy
 
 def accuracy_score_net_old(net, dataset, bs=64, num_workers=6):
+    assert len(net)==1, 'stitchnet should have only one fragment'
     count = 0
     for x,t in tqdm(load_dl(dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
         y = evalulate_stitchnet(net, x)
@@ -1247,6 +1258,7 @@ def accuracy_score_net_old(net, dataset, bs=64, num_workers=6):
 import onnxruntime as ort
 
 def accuracy_score_net(net, dataset, bs=64, num_workers=6):
+    assert len(net)==1, 'stitchnet should have only one fragment'
     count = 0
     fragmentC = net[0]
     change_input_dim(fragmentC.fragment)
@@ -1263,6 +1275,7 @@ def accuracy_score_net(net, dataset, bs=64, num_workers=6):
         # y = ys[0]
         # print('y.shape', y.shape)
         y = np.argmax(y, 1)
+        # print('y.shape', y.shape)
         y = convert_imagenet_to_cat_dog_label(y)
         count += np.sum(y == t.numpy())
     accuracy = 1.*count/len(dataset)
@@ -1369,3 +1382,11 @@ def eval_original_model(model, dataloaders):
         epoch_acc[phase] = 1.0 * running_corrects / len(dataloaders[phase].dataset)
     
     return epoch_acc['val'],epoch_acc['train']
+
+def evaluate_onnx_fragment(onnxFragment, dataset_val):
+    # fragmentFiles
+    fullNet = Net([onnxFragment])
+    macs, params = get_macs_params(fullNet[0])
+    acc = accuracy_score_net(fullNet, dataset_val, bs=256)
+    # print(acc, macs, params)
+    return acc, macs, params

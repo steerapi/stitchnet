@@ -1,15 +1,30 @@
 import seaborn
-colors = seaborn.color_palette()
 
 from graphviz import Digraph
 
 def rgb_to_hex(r, g, b):
     return ('#{:X}{:X}{:X}').format(r, g, b)
 
+seaborn.set_theme()
+colors = seaborn.color_palette()
+# print(colors)
+colors = [rgb_to_hex(int(r*255),int(g*255),int(b*255)) for r,g,b in colors]
+# print(colors)
+# colors = ["#4C72B0",
+# "#DD8452",
+# "#55A868",
+# "#C44E52",
+# "#8172B3",
+# "#937860",
+# "#DA8BC3",
+# "#8C8C8C",
+# "#CCB974",
+# "#64B5CD"]
+
 def draw_stitchNet(nets, stitchNet, name="_results/stitchnet/net"):
     hexColor = {}
     for i,net in enumerate(nets):
-        hexColor[net.get_id()] = rgb_to_hex(*[int(c*256) for c in colors[i%len(colors)]])
+        hexColor[net.get_id()] = colors[i%len(colors)] #rgb_to_hex(*[int(c*255) for c in colors[i%len(colors)]])
         
     dot = Digraph(comment='StitchNet')
     dot.graph_attr['rankdir'] = 'BT'  
@@ -30,7 +45,7 @@ def draw_stitchNet(nets, stitchNet, name="_results/stitchnet/net"):
 def draw_stitchNet_fromTuples(fragmentTuples, numNets=10, name="_results/stitchnet/net"):
     hexColor = {}
     for i in range(numNets):
-        hexColor[i] = rgb_to_hex(*[int(c*256) for c in colors[i%len(colors)]])
+        hexColor[i] = colors[i%len(colors)] #rgb_to_hex(*[int(c*255) for c in colors[i%len(colors)]])
         
     dot = Digraph(comment='StitchNet')
     dot.graph_attr['rankdir'] = 'BT'  
