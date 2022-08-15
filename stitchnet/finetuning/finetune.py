@@ -46,6 +46,7 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, num_ite
     running_numsamples = 0
     iter_count = 0
 
+    print("running for num_iters: ", num_iters);
     def evaluate_val(model):
         running_corrects = 0
         for inputs, labels in tqdm(dataloaders['val']):
@@ -112,6 +113,7 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, num_ite
                     numsamples.append(running_numsamples)
                     model.eval()
                     acc = evaluate_val(model)
+                    acc = acc.item()
                     print(running_numsamples, acc)
                     iter_val_acc_history.append(acc)
                     model.train()
@@ -146,10 +148,10 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, num_ite
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
     
-    print(val_acc_history)
+    # print(val_acc_history)
     # load best model weights
-    model.load_state_dict(best_model_wts)
-    return model, numsamples, iter_val_acc_history, val_acc_history, val_loss_history, train_acc_history, train_loss_history
+    # model.load_state_dict(best_model_wts)
+    return numsamples, iter_val_acc_history, val_acc_history, val_loss_history, train_acc_history, train_loss_history
 
 
 def create_optimizer(model_ft, feature_extract=False):
@@ -176,7 +178,7 @@ def create_optimizer(model_ft, feature_extract=False):
     return optimizer_ft
 
 
-def finetune(model_onnx1, num_classes = 2, num_epochs = 30, num_iters=30, batch_size = 64, val_batch_size=256, feature_extract = True):
+def finetune(model_onnx1, data_score, num_classes = 2, num_epochs = 30, num_iters=30, batch_size = 64, val_batch_size=256, feature_extract = True):
 
     # model_onnx1 = load_onnx_model(modelname)
     torch_model_1 = convert(model_onnx1)
@@ -186,8 +188,8 @@ def finetune(model_onnx1, num_classes = 2, num_epochs = 30, num_iters=30, batch_
     setattr(torch_model_1, k, nn.Linear(lastLayer.in_features, num_classes, bias=lastLayer.bias is not None))
     
     dataloaders_dict = dict(
-        train=load_dl(load_cats_and_dogs_dset("train"), batch_size),
-        val=load_dl(load_cats_and_dogs_dset("test"), val_batch_size, num_workers=12)
+        train=load_dl(data_score, batch_size),
+        val=load_dl(load_cats_and_dogs_dset("test"), val_batch_size)
     )
     
     optimizer_ft = create_optimizer(torch_model_1)

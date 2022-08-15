@@ -646,7 +646,7 @@ def get_score_net(net, data_score, num_samples=1000):
         totalscore *= score
     return totalscore
 
-def get_data_score(batch_size=32):
+def get_data_score(batch_size=32, includeTarget=False):
     from stitchnet.stitchonnx.utils import load_cats_and_dogs_dset,convert_imagenet_to_cat_dog_label
     from stitchnet.stitchonnx.utils import accuracy_score_model,accuracy_score_net,load_dl
     from stitchnet.stitchonnx.utils import generate_networks, ScoreMapper
@@ -670,6 +670,8 @@ def get_data_score(batch_size=32):
 
     dl_score = load_dl(dataset_train, batch_size)
     data_score,t = next(iter(dl_score))
+    if includeTarget:
+        return data_score,t
     data_score = data_score.numpy()
     return data_score
 
