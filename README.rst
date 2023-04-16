@@ -1,4 +1,4 @@
-StitchNet
+StitchNet: Composing Neural Networks from Pre-Trained Fragments
 =============
 
 1. Download dogs and cats dataset from https://www.kaggle.com/c/dogs-vs-cats/data and put train data in _data/dogs_cats/raw/train folder
