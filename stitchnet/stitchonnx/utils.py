@@ -21,7 +21,8 @@ import operator
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # PROVIDERS = ['CPUExecutionProvider']
-PROVIDERS = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+# PROVIDERS = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+PROVIDERS = ['CUDAExecutionProvider']
 
 # def _create_onnx_model(model):
 #     graph = make_graph(model.graph.node, model.graph.name, model.graph.input,
@@ -344,6 +345,9 @@ def execute_fragments(fragments, x):
         ort_sess = ort.InferenceSession(f.SerializeToString(), providers=PROVIDERS)
         inputs = {}
         # print("exec", "input", f.graph.input[0].name, f.graph.input[0].type)
+        print(x.shape)
+        if isinstance(x, torch.Tensor):
+            x = x.numpy()
         inputs[f.graph.input[0].name] = x
         o = ort_sess.run(None, inputs)
         x = o[0]
@@ -385,18 +389,20 @@ class Net:
         
     def get_id(self):
         return self.id
-    def get_scores(self, x1, data):
+    def get_scores(self, x1, data, scoring_method='CKA'):
         tX = torch.from_numpy(x1)
         score_fragments = []
         for i,f in enumerate(self.fragments[:-1]):
             x2 = self.get_output(f,data)
             tY = torch.from_numpy(x2)
-            score = get_score(tX, tY, min(tX.shape[1],tY.shape[1])*10)
+            score = get_score(tX, tY, min(tX.shape[1],tY.shape[1])*10, scoring_method)
             score_fragments.append((score, self.fragmentCs[i+1]))
         return score_fragments
     
     def evaluate(self, x):
-        hashx = hashlib.md5(x.data.tobytes()).hexdigest()
+        if isinstance(x, torch.Tensor):
+            x = x.numpy()
+        hashx = hashlib.md5(x.tobytes()).hexdigest()
         os = execute_fragments(self.fragments, x)
         for f,o in zip(self.fragments,os):
             hashf = hash_model(f)
@@ -409,7 +415,9 @@ class Net:
     def get_output(self, f, x):
         hashf = hash_model(f)
         # print('hashf', hashf)
-        hashx = hashlib.md5(x.data.tobytes()).hexdigest()
+        if isinstance(x, torch.Tensor):
+            x = x.numpy()
+        hashx = hashlib.md5(x.tobytes()).hexdigest()
         if hashx in self.results[hashf]:
             return self.results[hashf][hashx]
         else:
@@ -626,6 +634,10 @@ def adjust_w(tX, tY, w):
     if w.ndim == 2:
         return adjust_w_linear(tX, tY, w)
     else:
+        # linear to conv, unsupport
+        if tX.ndim == 2 and tY.ndim == 4:
+            raise Exception("unsupport linear to conv stitching")
+        # print('tX.shape', tX.shape, 'tY.shape', tY.shape)
         return adjust_w_conv(tX, tY, w)
 
 # def clone_node(node):
@@ -636,6 +648,15 @@ def adjust_w(tX, tY, w):
 #         mode='constant',        # attributes
 #     )
 #     return newnode
+
+def get_score_net_beans(net, data_score, num_samples=1000):
+    totalscore = 1
+    for i,fragment1 in tqdm(enumerate(net[:-1])):
+        fragment2 = net[i+1]
+        score = get_score_fragments(fragment1, fragment2, data_score, num_samples=num_samples)
+        print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
+        totalscore *= score
+    return totalscore
 
 def get_score_net(net, data_score, num_samples=1000):
     totalscore = 1
@@ -668,7 +689,7 @@ def get_data_score(batch_size=32, includeTarget=False):
 
     dataset_train = load_cats_and_dogs_dset("train")
 
-    dl_score = load_dl(dataset_train, batch_size)
+    dl_score = load_dl(dataset_train, batch_size=batch_size)
     data_score,t = next(iter(dl_score))
     if includeTarget:
         return data_score,t
@@ -952,12 +973,15 @@ def get_all_fragments(nets):
 import threading
 
 class ScoreMapper:
-    def __init__(self, nets, data):
+    def __init__(self, nets, data, scoring_method='CKA'):
         self.nets = nets
         self.scoreMap = {}
         self.data = data
+        self.scoring_method = scoring_method
     def score(self, x1, curDepth, maxDepth=10, hashId=None):
-        hashx = hashlib.md5(x1.data.tobytes()).hexdigest()
+        if isinstance(x1, torch.Tensor):
+            x1 = x1.numpy()
+        hashx = hashlib.md5(x1.tobytes()).hexdigest()
         # if hashId is None:
         # else:
         #     hashx = hashId
@@ -975,7 +999,7 @@ class ScoreMapper:
         
         scores = []
         def net_scores(net2, x1, data, scores):
-            nextscores = net2.get_scores(x1,data)
+            nextscores = net2.get_scores(x1,data,self.scoring_method)
             # only take ending segments
             if curDepth >= maxDepth-1:
                 scores += nextscores[-1:]
@@ -1017,6 +1041,13 @@ def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, samp
     if K is not None:
         scores = scores[:K]
     print('potential next fragments:', len(scores))
+    print(f'potential next fragments before thresholding of {threshold}:', len(scores), [f'{s[0]:.2}' for s in scores])
+    # filter out the previous in curr
+    
+    scores = [(s,nextf) for s,nextf in scores if not check_already_has(curr,nextf)]
+    
+    print(f'potential next fragments after filter duplicated fragments:', len(scores), [f'{s[0]:.2}' for s in scores])
+
     if threshold is not None:
         scores = [score for score in scores if score[0]>threshold]
     # print('scores', [f'{s[0]:.2}' for s in scores])
@@ -1031,7 +1062,16 @@ def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, samp
         # yield score,nextf
         if s > threshold:
             yield s,nextf
-        
+
+# check if nextf already in curr
+def check_already_has(curr, nextf):
+    fId = curr.get_id()
+    nextFId = nextf.get_id()
+    if type(fId[0]) is tuple:
+        return nextFId in fId[0]
+    else:
+        return nextFId in (fId,)
+    
 def get_net_id(curr, nextf):
     fId = curr.get_id()
     if type(fId[0]) is tuple:
@@ -1064,6 +1104,9 @@ def get_macs_params_onnx(onnx_model, inputName=None, inputSize=(1, 3, 224, 224))
 
 def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False, K=None):
     for score,nextf in find_next_fragment(curr, scoreMapper, data, threshold, maxDepth, sample, K):
+        # skip fragment if it is the same as current fragment
+        # print('curr', curr.fragment)
+        # print('nextf', nextf.fragment)
         totalscore_nextf = totalscore*score
         if totalscore_nextf < totalThreshold:
             continue
@@ -1152,8 +1195,35 @@ def evalulate_stitchnet(net, data):
     return data
     
 from .ptCKA import linear_CKA
+    
+def pt_R2(X, Y):
+    # QR decomposition of Y
+    Q, R = torch.linalg.qr(Y)
+
+    # Compute the Frobenius norm of Q^T * X
+    # print('Q', Q.shape)
+    # print('X', X.shape)
+    # print('Q^T * X', torch.matmul(Q.T, X).shape)
+    numerator = torch.norm(torch.matmul(Q.T, X), p='fro') ** 2
+    # Compute the Frobenius norm of X
+    denominator = torch.norm(X, p='fro') ** 2
+    # print('numerator', numerator.item(), 'denominator', denominator.item(), 'numerator / denominator', numerator.item() / denominator.item())
+
+    # Compute and return R^2_LR
+    r2 = (numerator / denominator)
+    if r2 >= 1:
+        print('X',X)
+        print('Y',Y)
+    print('r2', r2.item(), numerator.item(), denominator.item())
+    return r2
+
 @torch.no_grad()
-def get_score(X, Y, num_samples=1000):
+def get_score(X, Y, num_samples=1000, scoring_method='CKA'):
+    if scoring_method == 'R2':
+        score_function = pt_R2
+    if scoring_method == 'CKA':
+        score_function = linear_CKA
+    
     # X = torch.from_numpy(X)
     # Y = torch.from_numpy(Y)
     # print('X1', X.shape)
@@ -1179,7 +1249,7 @@ def get_score(X, Y, num_samples=1000):
         # p = torch.ones(Y.shape[0])
         # indexY = p.multinomial(num_samples=num_samples)
         # print(X[indexX,:].shape, Y[indexY,:].shape)
-        s = linear_CKA(X[indexX,:],Y[indexX,:]).cpu().item()
+        s = score_function(X[indexX,:],Y[indexX,:]).cpu().item()
     elif X.ndim == 4 and Y.ndim == 2:
         pool = torch.nn.AdaptiveAvgPool2d(output_size=1)
         flat = torch.nn.Flatten()
@@ -1194,7 +1264,7 @@ def get_score(X, Y, num_samples=1000):
         indexY = p.multinomial(num_samples=num_samples)
         X = X[:,indexX]
         Y = Y[:,indexY]
-        s = linear_CKA(X,Y).cpu().item()
+        s = score_function(X,Y).cpu().item()
     else:
         # TODO: check b > 2*min(X.shape[1],Y.shape[1])
         b = X.shape[0]
@@ -1207,7 +1277,7 @@ def get_score(X, Y, num_samples=1000):
         indexY = p.multinomial(num_samples=num_samples)
         X = X[:,indexX]
         Y = Y[:,indexY]
-        s = linear_CKA(X,Y).cpu().item()
+        s = score_function(X,Y).cpu().item()
         
     # CKA = linear_CKA(X, Y).cpu().item()
     # CKA = linear_CKA(X.cuda(), Y.cuda()).cpu().item()
@@ -1283,6 +1353,71 @@ def accuracy_score_net(net, dataset, bs=64, num_workers=6):
     accuracy = 1.*count/len(dataset)
     return accuracy
 
+from sklearn.neighbors import KNeighborsClassifier
+def accuracy_score_net_plants(net, dataset, train_dataset, bs=64, num_workers=6):
+    assert len(net)==1, 'stitchnet should have only one fragment'
+    count = 0
+    fragmentC = net[0]
+    change_input_dim(fragmentC.fragment)
+    ort_sess1 = ort.InferenceSession(fragmentC.fragment.SerializeToString(), providers=PROVIDERS)
+    
+    
+    # train the classfier first
+    nnX = []
+    nnY = []
+    ptdset_train = TensorDataset(train_dataset['pixel_values'], 
+                             train_dataset['labels'])
+    dl = load_dl(ptdset_train, batch_size=bs, shuffle=False, num_workers=0)
+    for dataItem in tqdm(dl):
+
+    # for x,t in tqdm(load_dl(train_dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
+        # data = x.numpy()
+        data = dataItem[0].squeeze(1).numpy()
+        t = dataItem[1].unsqueeze(1).numpy()
+
+        # y = evalulate_stitchnet(net, x)
+        inputs = {}
+        inputs[fragmentC.fragment.graph.input[0].name] = data
+        outputs = ort_sess1.run(None, inputs)
+        y = outputs[0]
+        nnX.append(y)
+        nnY.append(t)
+        
+    nnX = np.vstack(nnX)
+    nnY = np.vstack(nnY).squeeze()
+    print(nnX.shape, nnY.shape)
+    
+    knn = KNeighborsClassifier(n_neighbors=5)
+    knn.fit(nnX, nnY)
+    
+    # evaluate 
+    # for x,t in tqdm(load_dl(dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
+    #     data = x.numpy()
+    ptdset_test = TensorDataset(dataset['pixel_values'], 
+                             dataset['labels'])
+    dl = load_dl(ptdset_test, batch_size=bs, shuffle=False, num_workers=0)
+    for dataItem in tqdm(dl):
+
+    # for x,t in tqdm(load_dl(train_dataset, batch_size=bs, shuffle=False, num_workers=num_workers)):
+        # data = x.numpy()
+        data = dataItem[0].squeeze(1).numpy()
+        t = dataItem[1].numpy()
+        # print("t", t)
+
+        # y = evalulate_stitchnet(net, x)
+        inputs = {}
+        inputs[fragmentC.fragment.graph.input[0].name] = data
+        outputs = ort_sess1.run(None, inputs)
+        y = outputs[0]
+        # print("y",y)
+        y = knn.predict(y)
+        
+        count += np.sum(y == t)
+        # print("y, t", y, t, np.sum(y == t))
+    print(len(ptdset_test))
+    accuracy = 1.*count/len(ptdset_test)
+    return accuracy
+
 # data cat and dog
 # https://www.kaggle.com/competitions/dogs-vs-cats/rules
 
@@ -1292,14 +1427,70 @@ from torchvision.models import ResNet50_Weights
 import os
 from pathlib import Path
 
+
+from torch.utils.data import TensorDataset
+from transformers import AutoProcessor
+from datasets import load_dataset
+def load_hf_train_val_dset(name='sampath017/plants', test_fraction=0.2, seed=47):
+    dataset = load_dataset(name)
+    dset = dataset["train"].train_test_split(test_fraction, seed=seed)
+    p = AutoProcessor.from_pretrained('microsoft/resnet-50')
+    def processor_function(examples):
+        return p(examples["image"])
+    dset = dset.map(processor_function, batched=True)    
+    small_train_dataset = dset['train']
+    small_eval_dataset = dset['test']
+    dataset_train = TensorDataset(torch.Tensor(small_train_dataset['pixel_values']), torch.tensor(small_train_dataset['label']))
+    dataset_val = TensorDataset(torch.Tensor(small_eval_dataset['pixel_values']), torch.tensor(small_eval_dataset['label']))
+    return dataset_train, dataset_val
+
+def load_hf_train_val_dset_with_test_split(name='food101', train='train', val='validation',label="labels", num_train=None, num_val=None, streaming=False, seed=47):
+    dataset = load_dataset(name, streaming=streaming)
+    dset_train = dataset[train]
+    dset_test = dataset[val]
+    p = AutoProcessor.from_pretrained('microsoft/resnet-50')
+    if num_train is not None:
+        if streaming:
+            dset_train = dset_train.shuffle(seed=seed).take(num_train)
+        else:
+            dset_train = dset_train.shuffle(seed=seed).select(range(num_train))
+    else:
+        dset_train = dset_train.shuffle(seed=seed)
+    if num_val is not None:
+        if streaming:
+            dset_test = dset_test.shuffle(seed=seed).take(num_val)
+        else:
+            dset_test = dset_test.shuffle(seed=seed).select(range(num_val))
+    else:
+        dset_test = dset_test.shuffle(seed=seed)
+        
+    # return dset_train, dset_test
+    def processor_function(examples):
+        try:
+            r = p(examples["image"])
+            return r
+        except:
+            return {'pixel_values': None}
+    small_train_dataset = dset_train.map(processor_function, batched=False).filter(lambda x:x['pixel_values'] is not None, batched=False)   
+    small_test_dataset = dset_test.map(processor_function, batched=False).filter(lambda x:x['pixel_values'] is not None, batched=False)
+
+    # small_train_dataset = small_train_dataset.remove_columns('image')
+    # small_test_dataset = small_test_dataset.remove_columns('image')
+    small_train_dataset = small_train_dataset.with_format(type='torch')
+    small_test_dataset = small_test_dataset.with_format(type='torch')
+    
+    # dataset_train = TensorDataset(torch.Tensor(small_train_dataset['pixel_values']), torch.tensor(small_train_dataset[label]))
+    # dataset_val = TensorDataset(torch.Tensor(small_test_dataset['pixel_values']), torch.tensor(small_test_dataset[label]))
+    return small_train_dataset, small_test_dataset
+
 def load_cats_and_dogs_dset(folder="train"):
     weights = ResNet50_Weights.IMAGENET1K_V1
     preprocess = weights.transforms()
     dataset = torchvision.datasets.ImageFolder(f'_data/dogs_cats/{folder}', transform=preprocess)
     return dataset
 
-def load_dl(dset, batch_size=64, shuffle=True, num_workers=6):
-    dl = torch.utils.data.DataLoader(dset, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
+def load_dl(dset, collate_fn=None, batch_size=64, shuffle=True, num_workers=6):
+    dl = torch.utils.data.DataLoader(dset, collate_fn=collate_fn, shuffle=shuffle, batch_size=batch_size)
     return dl
 
 # def load_cats_and_dogs():
@@ -1406,3 +1597,63 @@ def get_accuracy_onnxfragments(onnxFragments, dataset_val):
     accuracy = 1.*count/len(dataset_val)
     # print('accuracy', accuracy)
     return accuracy
+
+from tqdm import tqdm
+from stitchnet.stitchonnx.report import Report, ReportPlants, ReportKNNHFDataset
+import traceback
+import os
+
+def run_experiment(result_name=None, nets=None, data_score=None, dataset_val=None, dataset_train=None, scoring_method='CKA',branching_factor=3, threshold=0.9, total_threshold=0.9, max_depth=16, eval_batch_size=16):
+    k = 0
+    if os.path.exists(f'./_results/{result_name}.txt'):
+        with open(f'./_results/{result_name}.txt', 'r') as f:
+            k = len(f.read().split('\n'))
+    scoreMapper = ScoreMapper(nets, data_score, scoring_method=scoring_method)
+    with ReportKNNHFDataset(eval_batch_size, f'./_results/{result_name}.txt', 'a') as report:
+        # for _ in tqdm(range(50)):
+        generator = generate_networks(nets, scoreMapper, data_score, 
+                              threshold=threshold, totalThreshold=total_threshold, 
+                              maxDepth=max_depth, sample=False, K=branching_factor)
+        for i,(s,net) in enumerate(generator):
+            try:
+                netname = f"_results/{result_name}/net{k:03}"
+                report.evaluate(nets, net, netname, s, dataset_val, dataset_train)
+                net.save(netname)
+                k += 1
+            except Exception as e:
+                print('ERROR', e)
+                traceback.print_exc()
+                pass
+            
+def get_stitching_data_from_dataset(dset, batch_size=32, shuffle=False, seed=47):
+    inps = []
+    if shuffle:
+        dset = dset.shuffle(seed=seed)
+    
+    if hasattr(dset,'take'):
+        dset = dset.take(range(batch_size))
+    else:
+        dset = dset.select(range(batch_size))
+
+    for x in tqdm(dset):
+        try:
+            inps += x['pixel_values']
+        except:
+            pass
+
+    data_score = np.stack(inps)
+    return data_score
+
+from evaluate import evaluator
+from stitchnet.stitchonnx.report import NetEvalPipeline
+
+def evaluate_net(net, dataset_train, dataset_val, label_column='label'):
+    task_evaluator = evaluator("image-classification")
+    pipe = NetEvalPipeline(dataset_train, net, label=label_column)
+    
+    valresult = task_evaluator.compute(pipe, data=dataset_val, metric="accuracy", input_column='pixel_values', label_column=label_column)
+    valacc = valresult['accuracy']
+    trainresult = task_evaluator.compute(pipe, data=dataset_train, metric="accuracy", input_column='pixel_values', label_column=label_column)
+    trainacc = trainresult['accuracy']
+    
+    return valacc, trainacc

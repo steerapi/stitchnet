@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "stitchnet"
-version = "0.1.0"
+version = "0.2.0"
 description = ""
 authors = ["Surat Teerapittayanon <steerapi@gmail.com>"]
 exclude = ["_*",".*"]
@@ -19,7 +19,6 @@ scipy = "^1.7.3"
 graphviz = "^0.20.1"
 torchvision = "^0.13.1"
 onnxruntime = "^1.12.1"
-onnxruntime-gpu = "^1.12.1"
 onnx2torch = "^1.4.1"
 
 [tool.poetry.dev-dependencies]
