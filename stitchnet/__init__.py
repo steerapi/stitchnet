@@ -35,7 +35,7 @@ def get_cache_folder():
             raise EnvironmentError("Unsupported operating system. Please set the SN_HOME environment variable.")
 
     return cache_folder
-
+    
 def generate(data_score, threshold=0.9, totalThreshold=0.5, maxDepth=10, sample=False, K=None):
     
     # get cache folder

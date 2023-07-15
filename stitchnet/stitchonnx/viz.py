@@ -40,8 +40,8 @@ def draw_net(stitchNet, name="_results/stitchnet/net"):
         dot.edge(str(f1), str(f2), label=str(i))
         # dot.edge(str(f1), str(f2), minlen="1")
             
-
     dot.format = 'svg'
+    print('saving to', f'{name}.{dot.format}')
     dot.render(f'{name}', view=False)
     return dot
 

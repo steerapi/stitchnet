@@ -385,6 +385,10 @@ class Net:
         self.knn = None
         self.p = None
     
+    def get_macs_params(self):
+        macs,params = get_macs_params(self[0])
+        return dict(macs=macs,params=params)
+
     def fit(self, train_dataset, label_column="label", batch_size=32):
         label = label_column
         net = self
@@ -509,7 +513,7 @@ class Net:
     def save(self, path):
         # print('len(self.fragments)', len(self.fragments))
         if len(self.fragments) == 1:
-            print('saving to', path)
+            print('saving to', f'{path}.onnx')
             save_onnx_model(self.fragments[0], f'{path}.onnx')
         else:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1212,8 +1216,15 @@ def get_net_id(curr, nextf):
     return nId
 
 import onnx_tool
+from onnx_tool.graph import Graph
 from onnx_tool import create_ndarray_f32
-from onnx_tool.node_profilers import graph_profile
+# from onnx_tool.node_profilers import graph_profile
+
+def graph_profile(onnxgraph, dynamic_shapes=None):
+    g = Graph(onnxgraph)
+    g.shape_infer(dynamic_shapes)
+    g.profile()
+    return g.macs,g.params
 
 def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 224)):
     inputs= {}
@@ -1221,7 +1232,7 @@ def get_macs_params(fragment: Fragment, inputName=None, inputSize=(1, 3, 224, 22
         inputName = fragment.fragment.graph.input[0].name
     inputs[inputName] = create_ndarray_f32(inputSize)
     # change_input_dim(fragment.fragment,1)
-    macs,params,nodemap=graph_profile(fragment.fragment.graph, inputs, False)
+    macs,params=graph_profile(fragment.fragment.graph, inputs)
     return macs, params
 
 def get_macs_params_onnx(onnx_model, inputName=None, inputSize=(1, 3, 224, 224)):
@@ -1230,7 +1241,7 @@ def get_macs_params_onnx(onnx_model, inputName=None, inputSize=(1, 3, 224, 224))
         inputName = onnx_model.graph.input[0].name
     inputs[inputName] = create_ndarray_f32(inputSize)
     # change_input_dim(fragment.fragment,1)
-    macs,params,nodemap=graph_profile(onnx_model.graph, inputs, False)
+    macs,params=graph_profile(onnx_model.graph, inputSize)
     return macs, params
 
 def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0.5, totalscore=1, maxDepth=10, sample=False, K=None):

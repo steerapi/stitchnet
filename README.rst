@@ -22,23 +22,24 @@ Usage
     from tqdm import tqdm
     stitching_dataset = np.vstack([x['pixel_values'] for x in tqdm(dataset_train.select(range(32)))])
     score,net = generate(stitching_dataset, threshold=0.8, totalThreshold=0, maxDepth=10, K=2, sample=True)
-        
+    
+    # print macs and params
+    net.get_macs_params() # {'macs': 4488343528.0, 'params': 25653096}
+    
     # save onnx
-    net.save_onnx('./_data/net')
+    net.save_onnx('./_data/net') # saving to ./_results/net.onnx
         
     # draw the stitchnet
-    net.draw_svg('./_data/net')
+    net.draw_svg('./_data/net') # saving to ./_results/net.svg
     
     # train a classifier
     net.fit(dataset_train, label_column="labels")
     
     # use it for prediction
-    net.predict_files(['./_results/test.jpg'])
-    # [{'score': [0.8, 0.2, 0.0], 'label': 0}]
+    net.predict_files(['./_results/test.jpg']) # [{'score': [0.8, 0.2, 0.0], 'label': 0}]
     
-    # evaluate the classifier
-    net.evaluate_dataset(dataset_val, label_column='labels')
-    # {'accuracy': 0.7421875}
+    # evaluate with validation dataset
+    net.evaluate_dataset(dataset_val, label_column='labels') # {'accuracy': 0.7421875}
 
 CUDA
 =============

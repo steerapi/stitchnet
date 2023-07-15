@@ -516,23 +516,16 @@ lint = ["clang-format (==13.0.0)", "flake8 (>=5.0.2)", "mypy (>=0.971)", "types-
 
 [[package]]
 name = "onnx-tool"
-version = "0.1.8"
-description = ""
+version = "0.7.3"
+description = "A tool for ONNX model:Rapid shape inference; Profile model; Compute Graph and Shape Engine; OPs fusion;Quantized models and sparse models are supported."
 category = "main"
 optional = false
 python-versions = "*"
-develop = false
 
 [package.dependencies]
 numpy = "*"
 onnx = "*"
 tabulate = "*"
-
-[package.source]
-type = "git"
-url = "https://github.com/steerapi/onnx-tool.git"
-reference = "main"
-resolved_reference = "d8a19f822bdc8e8d1853a55315d389202bc3628d"
 
 [[package]]
 name = "onnx2torch"
@@ -1187,7 +1180,7 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-ena
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.9,<3.12"
-content-hash = "c6e752dbf5dae3c0d9a329498331b4044324b8d48f88f9178c63da53fed6e759"
+content-hash = "f0f7253829048c386b662b784c9754ade72820f93028868c24b960fdee62eea7"
 
 [metadata.files]
 aiohttp = [
@@ -1839,7 +1832,10 @@ onnx = [
     {file = "onnx-1.13.1-cp39-cp39-win_amd64.whl", hash = "sha256:cd88a6b51d07ac8b3b88f2398256b4389ca4b84fe45acd1f8a0cb10425ae801d"},
     {file = "onnx-1.13.1.tar.gz", hash = "sha256:0bdcc25c2c1ce4a8750e4ffbd93ae945442e7fac6e51176f38e366b74a97dfd9"},
 ]
-onnx-tool = []
+onnx-tool = [
+    {file = "onnx-tool-0.7.3.tar.gz", hash = "sha256:245333024a0f0899eca147a97475ab616fb3b491bc0b6d664914dea9a225e84a"},
+    {file = "onnx_tool-0.7.3-py3-none-any.whl", hash = "sha256:a219dabec40f57b7dcfbdc70d51f37c73defb9c4081608608f9cc91e39772407"},
+]
 onnx2torch = [
     {file = "onnx2torch-1.5.10-py3-none-any.whl", hash = "sha256:0601466b0db1e758290884ed2448a417a1bb175ced9dfd398ecff9d4f85bfdbc"},
     {file = "onnx2torch-1.5.10.tar.gz", hash = "sha256:14682b91c5cf8cd3aa5d077ba1889599a68e9fe4ce72fa5f91e4e755c80ac03c"},

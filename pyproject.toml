@@ -8,7 +8,7 @@ exclude = ["_*",".*","*.ipynb"]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
-onnx-tool = { git = "https://github.com/steerapi/onnx-tool.git", branch = "main" }
+onnx-tool = "0.7.3"
 torch = "^1.12.1"
 skl2onnx = "1.12.*"
 onnxoptimizer = "^0.3.0"
