@@ -3,26 +3,32 @@ name = "stitchnet"
 version = "0.2.0"
 description = ""
 authors = ["Surat Teerapittayanon <steerapi@gmail.com>"]
-exclude = ["_*",".*"]
+readme = "README.rst"
+exclude = ["_*",".*","*.ipynb"]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
 onnx-tool = { git = "https://github.com/steerapi/onnx-tool.git", branch = "main" }
 torch = "^1.12.1"
-skl2onnx = "^1.12"
+skl2onnx = "1.12.*"
 onnxoptimizer = "^0.3.0"
 seaborn = "^0.11.2"
 pyppeteer = "^1.0.2"
-netron = "^5.9.9"
 numpy = "^1.23.1"
 scipy = "^1.7.3"
 graphviz = "^0.20.1"
 torchvision = "^0.13.1"
 onnxruntime = "^1.12.1"
 onnx2torch = "^1.4.1"
+transformers = "^4.25.1"
+netron = "^7.0.4"
+datasets = "^2.13.1"
+onnx = "1.13.1"
+evaluate = "^0.4.0"
+pyre-extensions = "^0.0.30"
 
 [tool.poetry.dev-dependencies]
-pytest = "^5.2"
+pytest = "^7.4.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
