@@ -19,10 +19,14 @@ from functools import reduce
 import operator
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+try:
+    torch.ones(1).cuda()
+except:
+    device = "cpu"
 
 # PROVIDERS = ['CPUExecutionProvider']
-# PROVIDERS = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-PROVIDERS = ['CUDAExecutionProvider']
+PROVIDERS = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+# PROVIDERS = ['CUDAExecutionProvider']
 
 # def _create_onnx_model(model):
 #     graph = make_graph(model.graph.node, model.graph.name, model.graph.input,
@@ -296,7 +300,7 @@ def get_fragments(model, x, n=3):
     inputs = find_conv_inputs(model)
     inputs = inputs[1::n]
     fragments = []
-    print('[POTENTIAL SPLIT LOCATIONS]:', inputs)
+    # print('[POTENTIAL SPLIT LOCATIONS]:', inputs)
     input_name = model.graph.input[0].name
     output_name = model.graph.output[0].name
     x = [x]
@@ -321,9 +325,9 @@ def get_fragments(model, x, n=3):
             fragments.append(f1)
         except Exception as e:
             # skip multiple input dependencies
-            print('[WARNING]:', i, inp, e)
+            # print('[WARNING]:', i, inp, e)
             # traceback.print_exc()
-            # pass
+            pass
     # print('len(get_input_nodes(model))', len(get_input_nodes(model)), [n.name for n in get_input_nodes(model)])
     inpnodes = get_input_nodes(model)
     # print('inputnodes', inp, len(inpnodes), [n.op_type for n in inpnodes], [n.input for n in inpnodes])
@@ -345,7 +349,7 @@ def execute_fragments(fragments, x):
         ort_sess = ort.InferenceSession(f.SerializeToString(), providers=PROVIDERS)
         inputs = {}
         # print("exec", "input", f.graph.input[0].name, f.graph.input[0].type)
-        print(x.shape)
+        # print(x.shape)
         if isinstance(x, torch.Tensor):
             x = x.numpy()
         inputs[f.graph.input[0].name] = x
@@ -362,6 +366,8 @@ def hash_model(f):
     hashf = hashlib.md5(f.SerializeToString()).hexdigest()
     return hashf
 
+from .viz import draw_net
+
 class Net:
     def __init__(self, fragments, nId=None):
         self.id = nId
@@ -376,7 +382,130 @@ class Net:
             fragmentCs.append(fragmentC)
         self.fragmentCs = fragmentCs
         self.results = defaultdict(dict)
+        self.knn = None
+        self.p = None
     
+    def fit(self, train_dataset, label_column="label", batch_size=32):
+        label = label_column
+        net = self
+        
+        fragmentC = net[0]
+        change_input_dim(fragmentC.fragment)
+        self.ort_sess1 = ort.InferenceSession(fragmentC.fragment.SerializeToString(), providers=PROVIDERS)
+        self.input_name = fragmentC.fragment.graph.input[0].name
+        
+        nnX = []
+        nnY = []
+        ptdset_train = TensorDataset(train_dataset['pixel_values'], 
+                             train_dataset[label])
+        dl = load_dl(ptdset_train, batch_size=batch_size, shuffle=False, num_workers=0)
+        for dataItem in tqdm(dl):
+            try:
+                X = dataItem[0].squeeze(1).numpy()
+                t = dataItem[1].unsqueeze(1).numpy()
+                inputs = {}
+                inputs[self.input_name] = X
+                outputs = self.ort_sess1.run(None, inputs)
+                y = outputs[0]
+                nnX.append(y)
+                nnY.append(t)
+            except Exception as e:
+                print('ERROR TRAIN', e)
+                traceback.print_exc()
+        
+        nnX = np.vstack(nnX)
+        nnY = np.vstack(nnY).squeeze()
+        
+        knn = KNeighborsClassifier(n_neighbors=5)
+        knn.fit(nnX, nnY)
+        
+        self.knn = knn
+        self.task = "image-classification"
+    
+    def __call__(self, pixel_values, **kwargs):
+        return self.predict(pixel_values)
+    def predict(self, pixel_values):
+        result = []
+        for pixel_value in tqdm(load_dl(pixel_values, batch_size=32, shuffle=False, num_workers=0)):
+        # for pixel_value in tqdm(pixel_values):
+            try:
+                X = pixel_value.squeeze(1).numpy()
+                inputs = {}
+                inputs[self.input_name] = X
+                outputs = self.ort_sess1.run(None, inputs)
+                y = outputs[0]
+                y = np.array(y)
+                # print('y.shape', y.shape)
+                labels = self.knn.predict(y)
+                scores = self.knn.predict_proba(y)
+                # print('score',score)
+                # print('label',label)
+                for score,label in zip(scores,labels):
+                    result += [{
+                        "score": list(score),
+                        "label": label
+                    }]
+            except Exception as e:
+                print('ERROR EVAL', e)
+                traceback.print_exc()
+                result += [{
+                    "score": 0,
+                    "label": -1
+                }]
+        return result
+    
+    def evaluate_dataset(self, dataset_val, label_column='labels'):
+        result = self(dataset_val['pixel_values'])
+        total = len(dataset_val)
+        count = 0
+        for r,t in zip(result,dataset_val['labels']):
+            if r['label']==t:
+                count+=1
+        return {'accuracy': 1.*count/total}  
+        
+    def predict_files(self, filenames):
+        if not isinstance(filenames, list):
+            filenames = [filenames]            
+        if self.knn is None:
+            raise Exception("classifier is not trained, please call fit before")
+        if self.p is None:
+            self.p = AutoProcessor.from_pretrained('microsoft/resnet-50')
+        result = []
+        try:
+            from PIL import Image
+            data = []
+            for filename in filenames:
+                im = Image.open(filename)
+                data += self.p(im)['pixel_values']
+            X = np.stack(data)
+            inputs = {}
+            inputs[self.input_name] = X
+            outputs = self.ort_sess1.run(None, inputs)
+            y = outputs[0]
+            y = np.array(y)
+            # print('y.shape', y.shape)
+            labels = self.knn.predict(y)
+            scores = self.knn.predict_proba(y)
+            for score,label in zip(scores,labels):
+                result += [{
+                    "score": list(score),
+                    "label": label
+                }]
+        except Exception as e:
+            print('ERROR EVAL', e)
+            traceback.print_exc()
+            result += [{
+                "score": 0,
+                "label": -1
+            }]
+        return result
+        
+    def draw_svg(self, path):
+        draw_net(self, path)
+        
+    def save_onnx(self, path):
+        self.save(path)
+        
     def save(self, path):
         # print('len(self.fragments)', len(self.fragments))
         if len(self.fragments) == 1:
@@ -595,7 +724,7 @@ def train_w(acts1, acts2, Winit, nepoch=1, batch_size=1024, learning_rate=1e-6, 
             optimizer.step()
         epoch_loss = running_loss/len(dset)
         # early stopping
-        print(f'epoch {epoch} loss', epoch_loss, acts1.shape, acts2.shape)
+        # print(f'epoch {epoch} loss', epoch_loss, acts1.shape, acts2.shape)
         if prev_loss is not None and prev_loss <= epoch_loss:
             break
         prev_loss = epoch_loss        
@@ -614,7 +743,7 @@ def adjust_w_conv(tX, tY, w):
     acts1sampled = acts1[indexX,:]
     acts2sampled = acts2[indexX,:]
 
-    print('diff sampled', (acts1sampled - acts2sampled).pow(2).sum())
+    # print('diff sampled', (acts1sampled - acts2sampled).pow(2).sum())
     
     acts1 = acts1.to(device)
     acts2 = acts2.to(device)
@@ -654,7 +783,7 @@ def get_score_net_beans(net, data_score, num_samples=1000):
     for i,fragment1 in tqdm(enumerate(net[:-1])):
         fragment2 = net[i+1]
         score = get_score_fragments(fragment1, fragment2, data_score, num_samples=num_samples)
-        print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
+        # print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
         totalscore *= score
     return totalscore
 
@@ -663,7 +792,7 @@ def get_score_net(net, data_score, num_samples=1000):
     for i,fragment1 in tqdm(enumerate(net[:-1])):
         fragment2 = net[i+1]
         score = get_score_fragments(fragment1, fragment2, data_score, num_samples=num_samples)
-        print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
+        # print(fragment1.fragment.graph.output[0].name, fragment2.fragment.graph.input[0].name, score)
         totalscore *= score
     return totalscore
 
@@ -722,10 +851,10 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
         x2 = fragment2.get_input(data)
     except Exception as e:
         traceback.print_exc()
-        print('-------fragment1 ops-------')
-        list_ops(fragment1.fragment)
-        print('-------fragment2 ops-------')
-        list_ops(fragment2.fragment)
+        # print('-------fragment1 ops-------')
+        # list_ops(fragment1.fragment)
+        # print('-------fragment2 ops-------')
+        # list_ops(fragment2.fragment)
         raise e
     tX = torch.from_numpy(x1)
     tY = torch.from_numpy(x2)
@@ -821,10 +950,10 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
         raise Exception("There are more than one inputs to stitch and it is not all going into Conv.")
 
     if len(inpnodes) == 0:
-        print('len(inpnodes)', len(inpnodes))
-        print('newFragment', newFragment, fragment2.fragment)
-        list_ops('newFragment', newFragment)
-        list_ops('fragment2', fragment2.fragment)
+        # print('len(inpnodes)', len(inpnodes))
+        # print('newFragment', newFragment, fragment2.fragment)
+        # list_ops('newFragment', newFragment)
+        # list_ops('fragment2', fragment2.fragment)
         raise Exception("No inputs.")
         
     enterNode = inpnodes[0]
@@ -957,7 +1086,7 @@ def stitch_fragments(fragment1: Fragment, fragment2: Fragment, data):
 def list_net_ops(net):
     for f in net:
         list_ops(f.fragment)
-        print()
+        # print()
 
 def get_all_fragments(nets):
     fragments = [f for net in nets for f in net]
@@ -1036,17 +1165,18 @@ def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, samp
         curDepth = len(fId[0])
     else:
         curDepth = 1
-    print('current depth:', curDepth) 
+    # print('current depth:', curDepth) 
     scores = scoreMapper.score(x1, curDepth, maxDepth=maxDepth)
     if K is not None:
         scores = scores[:K]
-    print('potential next fragments:', len(scores))
-    print(f'potential next fragments before thresholding of {threshold}:', len(scores), [f'{s[0]:.2}' for s in scores])
+    # print('potential next fragments:', len(scores))
+    # print(f'potential next fragments before thresholding of {threshold}:', len(scores), [f'{s[0]:.2}' for s in scores])
     # filter out the previous in curr
     
     scores = [(s,nextf) for s,nextf in scores if not check_already_has(curr,nextf)]
     
-    print(f'potential next fragments after filter duplicated fragments:', len(scores), [f'{s[0]:.2}' for s in scores])
+    # print(f'potential next fragments after filter duplicated fragments:', len(scores), [f'{s[0]:.2}' for s in scores])
+    print(f'potential next fragments before thresholding of {threshold}:', len(scores), [f'{s[0]:.2}' for s in scores])
 
     if threshold is not None:
         scores = [score for score in scores if score[0]>threshold]
@@ -1060,8 +1190,9 @@ def find_next_fragment(curr, scoreMapper, data, threshold=0.5, maxDepth=10, samp
         # if score < threshold:
         #     continue
         # yield score,nextf
-        if s > threshold:
-            yield s,nextf
+        # if s > threshold:
+        #     yield s,nextf
+        yield s,nextf
 
 # check if nextf already in curr
 def check_already_has(curr, nextf):
@@ -1108,9 +1239,9 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
         # print('curr', curr.fragment)
         # print('nextf', nextf.fragment)
         totalscore_nextf = totalscore*score
+        print(f'totalscore before thresholding of {totalThreshold}: {totalscore_nextf}');
         if totalscore_nextf < totalThreshold:
             continue
-        print('totalscore', totalscore_nextf);
         try:
             if nextf.fragment.graph.name=='end':
                 newcurr_fragment = stitch_fragments(curr, nextf, data)
@@ -1125,8 +1256,8 @@ def recursive_stitching(curr, scoreMapper, data, threshold=0.9, totalThreshold=0
                     yield _score, _curr
         except Exception as e:
             # catch death end path with errors
-            print('ERROR', e)
-            traceback.print_exc()
+            print('[WARNING]', e)
+            # traceback.print_exc()
             # raise e
             # pass
             
@@ -1211,10 +1342,10 @@ def pt_R2(X, Y):
 
     # Compute and return R^2_LR
     r2 = (numerator / denominator)
-    if r2 >= 1:
-        print('X',X)
-        print('Y',Y)
-    print('r2', r2.item(), numerator.item(), denominator.item())
+    # if r2 >= 1:
+    #     print('X',X)
+    #     print('Y',Y)
+    # print('r2', r2.item(), numerator.item(), denominator.item())
     return r2
 
 @torch.no_grad()
@@ -1385,7 +1516,7 @@ def accuracy_score_net_plants(net, dataset, train_dataset, bs=64, num_workers=6)
         
     nnX = np.vstack(nnX)
     nnY = np.vstack(nnY).squeeze()
-    print(nnX.shape, nnY.shape)
+    # print(nnX.shape, nnY.shape)
     
     knn = KNeighborsClassifier(n_neighbors=5)
     knn.fit(nnX, nnY)
@@ -1414,7 +1545,7 @@ def accuracy_score_net_plants(net, dataset, train_dataset, bs=64, num_workers=6)
         
         count += np.sum(y == t)
         # print("y, t", y, t, np.sum(y == t))
-    print(len(ptdset_test))
+    # print(len(ptdset_test))
     accuracy = 1.*count/len(ptdset_test)
     return accuracy
 
@@ -1447,8 +1578,14 @@ def load_hf_train_val_dset(name='sampath017/plants', test_fraction=0.2, seed=47)
 def load_hf_train_val_dset_with_test_split(name='food101', train='train', val='validation',label="labels", num_train=None, num_val=None, streaming=False, seed=47):
     dataset = load_dataset(name, streaming=streaming)
     dset_train = dataset[train]
-    dset_test = dataset[val]
     p = AutoProcessor.from_pretrained('microsoft/resnet-50')
+    def processor_function(examples):
+        try:
+            r = p(examples["image"])
+            return r
+        except:
+            return {'pixel_values': None}
+    
     if num_train is not None:
         if streaming:
             dset_train = dset_train.shuffle(seed=seed).take(num_train)
@@ -1456,32 +1593,26 @@ def load_hf_train_val_dset_with_test_split(name='food101', train='train', val='v
             dset_train = dset_train.shuffle(seed=seed).select(range(num_train))
     else:
         dset_train = dset_train.shuffle(seed=seed)
-    if num_val is not None:
-        if streaming:
-            dset_test = dset_test.shuffle(seed=seed).take(num_val)
-        else:
-            dset_test = dset_test.shuffle(seed=seed).select(range(num_val))
-    else:
-        dset_test = dset_test.shuffle(seed=seed)
         
-    # return dset_train, dset_test
-    def processor_function(examples):
-        try:
-            r = p(examples["image"])
-            return r
-        except:
-            return {'pixel_values': None}
     small_train_dataset = dset_train.map(processor_function, batched=False).filter(lambda x:x['pixel_values'] is not None, batched=False)   
-    small_test_dataset = dset_test.map(processor_function, batched=False).filter(lambda x:x['pixel_values'] is not None, batched=False)
-
-    # small_train_dataset = small_train_dataset.remove_columns('image')
-    # small_test_dataset = small_test_dataset.remove_columns('image')
     small_train_dataset = small_train_dataset.with_format(type='torch')
-    small_test_dataset = small_test_dataset.with_format(type='torch')
-    
-    # dataset_train = TensorDataset(torch.Tensor(small_train_dataset['pixel_values']), torch.tensor(small_train_dataset[label]))
-    # dataset_val = TensorDataset(torch.Tensor(small_test_dataset['pixel_values']), torch.tensor(small_test_dataset[label]))
-    return small_train_dataset, small_test_dataset
+        
+    if val is not None:
+        dset_test = dataset[val]
+        if num_val is not None:
+            if streaming:
+                dset_test = dset_test.shuffle(seed=seed).take(num_val)
+            else:
+                dset_test = dset_test.shuffle(seed=seed).select(range(num_val))
+        else:
+            dset_test = dset_test.shuffle(seed=seed)
+
+        small_test_dataset = dset_test.map(processor_function, batched=False).filter(lambda x:x['pixel_values'] is not None, batched=False)
+        small_test_dataset = small_test_dataset.with_format(type='torch')
+
+        return small_train_dataset, small_test_dataset
+    else:
+        return small_train_dataset
 
 def load_cats_and_dogs_dset(folder="train"):
     weights = ResNet50_Weights.IMAGENET1K_V1
@@ -1621,8 +1752,8 @@ def run_experiment(result_name=None, nets=None, data_score=None, dataset_val=Non
                 net.save(netname)
                 k += 1
             except Exception as e:
-                print('ERROR', e)
-                traceback.print_exc()
+                print('[WARNING]', e)
+                # traceback.print_exc()
                 pass
             
 def get_stitching_data_from_dataset(dset, batch_size=32, shuffle=False, seed=47):
