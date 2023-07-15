@@ -23,6 +23,7 @@ Usage
     stitching_dataset = np.vstack([x['pixel_values'] for x in tqdm(dataset_train.select(range(32)))])
 
     # generate stitchnets 1 sample
+    from stitchnet import generate
     score,net = generate(stitching_dataset, threshold=0, totalThreshold=0, maxDepth=10, K=2, sample=True)
     
     # generate multiple stitchnets
