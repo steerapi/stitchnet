@@ -1,6 +1,7 @@
 StitchNet: Composing Neural Networks from Pre-Trained Fragments
 =============
 
+We propose StitchNet, a novel neural network creation paradigm that stitches together fragments (one or more consecutive network layers) from multiple pre-trained neural networks. StitchNet allows the creation of high-performing neural networks without the large compute and data requirements needed under traditional model creation processes via backpropagation training. We leverage Centered Kernel Alignment (CKA) as a compatibility measure to efficiently guide the selection of these fragments in composing a network for a given task tailored to specific accuracy needs and computing resource constraints. We then show that these fragments can be stitched together to create neural networks with comparable accuracy to traditionally trained networks at a fraction of computing resource and data requirements. Finally, we explore a novel on-the-fly personalized model creation and inference application enabled by this new paradigm.
 
 Installation
 =============
@@ -12,16 +13,22 @@ Usage
     
     import stitchnet
     
-    # prepare stitching data D
-    from stitchnet import load_hf_dataset
     # load the beans dataset from huggingface
+    from stitchnet import load_hf_dataset
     dataset_train, dataset_val = load_hf_dataset('beans', train_split='validation', val_split='test', label_column='labels', seed=47)
-    
-    # generate stitchnets
+
+    # prepare stitching dataset
     import numpy as np
     from tqdm import tqdm
     stitching_dataset = np.vstack([x['pixel_values'] for x in tqdm(dataset_train.select(range(32)))])
-    score,net = generate(stitching_dataset, threshold=0.8, totalThreshold=0, maxDepth=10, K=2, sample=True)
+
+    # generate stitchnets 1 sample
+    score,net = generate(stitching_dataset, threshold=0, totalThreshold=0, maxDepth=10, K=2, sample=True)
+    
+    # generate multiple stitchnets
+    generator = generate(stitching_dataset, threshold=0.8, totalThreshold=0.8, maxDepth=10, K=2, sample=False)
+    for score,net in generator:
+        print(score,net)
     
     # print macs and params
     net.get_macs_params() # {'macs': 4488343528.0, 'params': 25653096}

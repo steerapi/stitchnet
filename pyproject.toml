@@ -1,9 +1,9 @@
 [tool.poetry]
 name = "stitchnet"
-version = "0.2.0"
+version = "0.2.2"
 description = ""
 authors = ["Surat Teerapittayanon <steerapi@gmail.com>"]
-readme = "README.rst"
+readme = "README.md"
 exclude = ["_*",".*","*.ipynb"]
 
 [tool.poetry.dependencies]
